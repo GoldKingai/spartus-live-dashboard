@@ -29,7 +29,7 @@ SYMBOL_MAP_DEFAULT: Dict[str, str] = {
 # Alternative names brokers commonly use for each instrument
 # ------------------------------------------------------------------
 BROKER_ALTERNATIVES: Dict[str, List[str]] = {
-    "US500": ["SPX500", "USA500", "USA500IDXUSD", "SP500m", "US500.cash"],
+    "US500": ["SP500", "SPX500", "USA500", "USA500IDXUSD", "SP500m", "US500.cash"],
     "USOIL": ["WTI", "CL-OIL", "USOUSD", "LIGHTCMDUSD", "XTIUSD", "OIL.WTI"],
     "XAUUSD": ["GOLD", "XAUUSDm"],
     "EURUSD": ["EURUSDm"],
