@@ -198,45 +198,41 @@ class LiveDashboard(QMainWindow):
 
         # Start Trading
         self._btn_start = QPushButton("Start Trading")
-        self._btn_start.setStyleSheet(
-            f"background-color: {C['green']}; color: {C['bg']}; "
-            f"font-weight: bold; border: none; border-radius: 4px; "
-            f"padding: 6px 16px;"
-        )
+        self._btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_start.clicked.connect(self.start_trading)
         layout.addWidget(self._btn_start)
 
         # Wind Down
         self._btn_wind_down = QPushButton("Wind Down")
-        self._btn_wind_down.setStyleSheet(
-            f"background-color: {C['yellow']}; color: {C['bg']}; "
-            f"font-weight: bold; border: none; border-radius: 4px; "
-            f"padding: 6px 16px;"
-        )
+        self._btn_wind_down.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_wind_down.clicked.connect(self.wind_down)
         self._btn_wind_down.setEnabled(False)
         layout.addWidget(self._btn_wind_down)
 
         # Stop Now
         self._btn_stop = QPushButton("Stop Now")
-        self._btn_stop.setStyleSheet(
-            f"background-color: {C['red']}; color: {C['white']}; "
-            f"font-weight: bold; border: none; border-radius: 4px; "
-            f"padding: 6px 16px;"
-        )
+        self._btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_stop.clicked.connect(self.stop_trading)
         self._btn_stop.setEnabled(False)
         layout.addWidget(self._btn_stop)
 
         # Emergency Stop -- always visible & enabled
         self._btn_emergency = QPushButton("Emergency Stop")
+        self._btn_emergency.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_emergency.setStyleSheet(
-            f"background-color: #cc0000; color: {C['white']}; "
-            f"font-weight: bold; border: 2px solid {C['red']}; "
-            f"border-radius: 4px; padding: 6px 16px;"
+            f"QPushButton {{ "
+            f"  background-color: #cc0000; color: {C['white']}; "
+            f"  font-weight: bold; border: 2px solid {C['red']}; "
+            f"  border-radius: 4px; padding: 6px 16px; "
+            f"}} "
+            f"QPushButton:hover {{ background-color: #e60000; border-color: #ff5555; }} "
+            f"QPushButton:pressed {{ background-color: #990000; border-color: #cc0000; }}"
         )
         self._btn_emergency.clicked.connect(self.emergency_stop)
         layout.addWidget(self._btn_emergency)
+
+        # Apply initial styles based on STOPPED state
+        self._update_button_states()
 
         return bar
 
@@ -346,32 +342,114 @@ class LiveDashboard(QMainWindow):
         """Show / hide the paper trading banner."""
         self._paper_banner.setVisible(self._paper_trading)
 
+    # -- Header button style helpers -----------------------------------------
+
+    @staticmethod
+    def _hdr_btn_interactive(bg: str, fg: str, hover_bg: str, pressed_bg: str) -> str:
+        """Stylesheet for an enabled, clickable header button."""
+        return (
+            f"QPushButton {{ background-color: {bg}; color: {fg}; "
+            f"font-weight: bold; border: none; border-radius: 4px; "
+            f"padding: 6px 16px; }} "
+            f"QPushButton:hover {{ background-color: {hover_bg}; }} "
+            f"QPushButton:pressed {{ background-color: {pressed_bg}; "
+            f"padding-top: 7px; padding-bottom: 5px; }}"
+        )
+
+    @staticmethod
+    def _hdr_btn_active(color: str, tint_bg: str) -> str:
+        """Stylesheet for a disabled button showing the active state."""
+        return (
+            f"QPushButton {{ background-color: {tint_bg}; color: {color}; "
+            f"font-weight: bold; border: 2px solid {color}; "
+            f"border-radius: 4px; padding: 6px 16px; }}"
+        )
+
+    @staticmethod
+    def _hdr_btn_disabled() -> str:
+        """Stylesheet for a greyed-out disabled button."""
+        return (
+            f"QPushButton {{ background-color: {C['surface']}; color: {C['dim']}; "
+            f"font-weight: bold; border: 1px solid {C['border']}; "
+            f"border-radius: 4px; padding: 6px 16px; }}"
+        )
+
+    # -------------------------------------------------------------------------
+
     def _update_button_states(self) -> None:
-        """Enable / disable buttons based on current trading state.
+        """Enable / disable buttons and apply visual styles for state feedback.
 
         State machine rules:
-          STOPPED       -> Start enabled (if components ready), others disabled
-          RUNNING       -> Wind Down + Stop Now enabled, Start disabled
-          WINDING_DOWN  -> Stop Now enabled only
-          CB_PAUSED     -> treated like RUNNING for button purposes
+          STOPPED       -> Start enabled (interactive), others disabled (grey)
+          RUNNING       -> Start shows 'Running' (active glow), Wind Down + Stop interactive
+          WINDING_DOWN  -> Wind Down shows 'Winding Down...' (active glow), Stop interactive
+          CB_PAUSED     -> Start shows 'CB Paused' (active glow, orange), Wind Down + Stop interactive
 
-        Emergency Stop is always visible and enabled.
+        The active-state button uses a coloured border + tinted background so
+        the user can tell the current state just from the buttons, without
+        needing to read the status indicator.
+
+        Emergency Stop is always visible, enabled, and styled.
         """
         state = self._trading_state
         components_ready = self._mt5_bridge is not None
 
+        # Reusable interactive styles
+        green = self._hdr_btn_interactive(C['green'], C['bg'], '#40e640', '#1fa01f')
+        yellow = self._hdr_btn_interactive(C['yellow'], C['bg'], '#ffe04d', '#d4aa00')
+        red = self._hdr_btn_interactive(C['red'], C['white'], '#ff5555', '#cc2222')
+        disabled = self._hdr_btn_disabled()
+
         if state == TradingState.STOPPED:
+            self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(components_ready)
+            self._btn_start.setStyleSheet(green if components_ready else disabled)
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(False)
+            self._btn_wind_down.setStyleSheet(disabled)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(False)
+            self._btn_stop.setStyleSheet(disabled)
+
         elif state == TradingState.RUNNING or state == TradingState.CB_PAUSED:
+            # Start button -> active indicator
+            if state == TradingState.RUNNING:
+                self._btn_start.setText("\u25cf  Running")
+                self._btn_start.setStyleSheet(
+                    self._hdr_btn_active(C['green'], '#0a2a0a')
+                )
+            else:
+                self._btn_start.setText("\u25cf  CB Paused")
+                self._btn_start.setStyleSheet(
+                    self._hdr_btn_active(C['peach'], '#2a1a0a')
+                )
             self._btn_start.setEnabled(False)
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(True)
+            self._btn_wind_down.setStyleSheet(yellow)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(True)
+            self._btn_stop.setStyleSheet(red)
+
         elif state == TradingState.WINDING_DOWN:
+            self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(False)
+            self._btn_start.setStyleSheet(disabled)
+
+            # Wind Down button -> active indicator
+            self._btn_wind_down.setText("\u25cf  Winding Down\u2026")
             self._btn_wind_down.setEnabled(False)
+            self._btn_wind_down.setStyleSheet(
+                self._hdr_btn_active(C['yellow'], '#2a2500')
+            )
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(True)
+            self._btn_stop.setStyleSheet(red)
 
         # Emergency Stop is always enabled
         self._btn_emergency.setEnabled(True)

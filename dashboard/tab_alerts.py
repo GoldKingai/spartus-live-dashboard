@@ -205,103 +205,50 @@ class AlertsTab(QWidget):
         layout.setSpacing(8)
 
         # Start Trading
-        self._btn_start = QPushButton("Start Trading")
-        self._btn_start.setStyleSheet(
-            f"QPushButton {{ "
-            f"  background-color: {C['surface2']}; "
-            f"  color: {C['green']}; "
-            f"  border: 2px solid {C['green']}; "
-            f"  border-radius: 4px; "
-            f"  padding: 10px 16px; "
-            f"  font-size: 13px; font-weight: bold; "
-            f"}} "
-            f"QPushButton:hover {{ background-color: {C['border']}; }} "
-            f"QPushButton:disabled {{ "
-            f"  color: {C['dim']}; border-color: {C['border']}; "
-            f"  background-color: {C['surface']}; "
-            f"}}"
-        )
+        self._btn_start = QPushButton("\u25b6  Start Trading")
+        self._btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_start.clicked.connect(self.start_requested.emit)
         layout.addWidget(self._btn_start)
 
         # Wind Down
         self._btn_wind_down = QPushButton("Wind Down")
-        self._btn_wind_down.setStyleSheet(
-            f"QPushButton {{ "
-            f"  background-color: {C['surface2']}; "
-            f"  color: {C['yellow']}; "
-            f"  border: 2px solid {C['yellow']}; "
-            f"  border-radius: 4px; "
-            f"  padding: 10px 16px; "
-            f"  font-size: 13px; font-weight: bold; "
-            f"}} "
-            f"QPushButton:hover {{ background-color: {C['border']}; }} "
-            f"QPushButton:disabled {{ "
-            f"  color: {C['dim']}; border-color: {C['border']}; "
-            f"  background-color: {C['surface']}; "
-            f"}}"
-        )
+        self._btn_wind_down.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_wind_down.setEnabled(False)
         self._btn_wind_down.clicked.connect(self.wind_down_requested.emit)
         layout.addWidget(self._btn_wind_down)
 
         # Stop Now
         self._btn_stop = QPushButton("Stop Now")
-        self._btn_stop.setStyleSheet(
-            f"QPushButton {{ "
-            f"  background-color: {C['surface2']}; "
-            f"  color: {C['red']}; "
-            f"  border: 2px solid {C['red']}; "
-            f"  border-radius: 4px; "
-            f"  padding: 10px 16px; "
-            f"  font-size: 13px; font-weight: bold; "
-            f"}} "
-            f"QPushButton:hover {{ background-color: {C['border']}; }} "
-            f"QPushButton:disabled {{ "
-            f"  color: {C['dim']}; border-color: {C['border']}; "
-            f"  background-color: {C['surface']}; "
-            f"}}"
-        )
+        self._btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self.stop_requested.emit)
         layout.addWidget(self._btn_stop)
 
         # Emergency Stop -- bright red background, ALWAYS enabled
         self._btn_emergency = QPushButton("EMERGENCY STOP")
+        self._btn_emergency.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_emergency.setStyleSheet(
             f"QPushButton {{ "
-            f"  background-color: #cc0000; "
-            f"  color: {C['white']}; "
-            f"  border: 2px solid {C['red']}; "
-            f"  border-radius: 4px; "
-            f"  padding: 10px 16px; "
-            f"  font-size: 14px; font-weight: bold; "
+            f"  background-color: #cc0000; color: {C['white']}; "
+            f"  border: 2px solid {C['red']}; border-radius: 4px; "
+            f"  padding: 10px 16px; font-size: 14px; font-weight: bold; "
             f"}} "
-            f"QPushButton:hover {{ background-color: {C['red']}; }}"
+            f"QPushButton:hover {{ background-color: #e60000; border-color: #ff5555; }} "
+            f"QPushButton:pressed {{ background-color: #990000; border-color: #cc0000; "
+            f"  padding-top: 11px; padding-bottom: 9px; }}"
         )
         self._btn_emergency.clicked.connect(self.emergency_stop_requested.emit)
         layout.addWidget(self._btn_emergency)
 
         # Reset Circuit Breaker
         self._btn_reset_cb = QPushButton("Reset Circuit Breaker")
-        self._btn_reset_cb.setStyleSheet(
-            f"QPushButton {{ "
-            f"  background-color: {C['surface2']}; "
-            f"  color: {C['peach']}; "
-            f"  border: 2px solid {C['peach']}; "
-            f"  border-radius: 4px; "
-            f"  padding: 8px 16px; "
-            f"  font-size: 12px; font-weight: bold; "
-            f"}} "
-            f"QPushButton:hover {{ background-color: {C['border']}; }} "
-            f"QPushButton:disabled {{ "
-            f"  color: {C['dim']}; border-color: {C['border']}; "
-            f"  background-color: {C['surface']}; "
-            f"}}"
-        )
+        self._btn_reset_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_reset_cb.setEnabled(False)
         self._btn_reset_cb.clicked.connect(self.reset_cb_requested.emit)
         layout.addWidget(self._btn_reset_cb)
+
+        # Apply initial styles based on STOPPED state
+        self._update_button_states("STOPPED")
 
         layout.addStretch()
         return box
@@ -585,45 +532,162 @@ class AlertsTab(QWidget):
                 f"background: transparent; border: none;"
             )
 
+    # -- Tab 5 button style helpers -------------------------------------------
+
+    @staticmethod
+    def _t5_btn_interactive(color: str, hover_bg: str, pressed_bg: str) -> str:
+        """Stylesheet for an enabled, clickable Tab 5 button."""
+        return (
+            f"QPushButton {{ background-color: {C['surface2']}; color: {color}; "
+            f"border: 2px solid {color}; border-radius: 4px; "
+            f"padding: 10px 16px; font-size: 13px; font-weight: bold; }} "
+            f"QPushButton:hover {{ background-color: {hover_bg}; }} "
+            f"QPushButton:pressed {{ background-color: {pressed_bg}; "
+            f"padding-top: 11px; padding-bottom: 9px; }}"
+        )
+
+    @staticmethod
+    def _t5_btn_active(color: str, tint_bg: str) -> str:
+        """Stylesheet for a disabled button showing the active state."""
+        return (
+            f"QPushButton {{ background-color: {tint_bg}; color: {color}; "
+            f"border: 2px solid {color}; border-radius: 4px; "
+            f"padding: 10px 16px; font-size: 13px; font-weight: bold; }}"
+        )
+
+    @staticmethod
+    def _t5_btn_disabled() -> str:
+        """Stylesheet for a greyed-out disabled button."""
+        return (
+            f"QPushButton {{ background-color: {C['surface']}; color: {C['dim']}; "
+            f"border: 1px solid {C['border']}; border-radius: 4px; "
+            f"padding: 10px 16px; font-size: 13px; font-weight: bold; }}"
+        )
+
+    @staticmethod
+    def _t5_reset_interactive() -> str:
+        """Stylesheet for the Reset CB button when enabled."""
+        return (
+            f"QPushButton {{ background-color: {C['surface2']}; color: {C['peach']}; "
+            f"border: 2px solid {C['peach']}; border-radius: 4px; "
+            f"padding: 8px 16px; font-size: 12px; font-weight: bold; }} "
+            f"QPushButton:hover {{ background-color: {C['border']}; }} "
+            f"QPushButton:pressed {{ background-color: {C['surface']}; "
+            f"padding-top: 9px; padding-bottom: 7px; }}"
+        )
+
+    # -------------------------------------------------------------------------
+
     def _update_button_states(self, state: str) -> None:
-        """Enable/disable buttons based on the current trading state.
+        """Enable/disable buttons and apply visual styles for state feedback.
 
         State machine rules:
-          STOPPED       -> Start enabled, others disabled (except Emergency)
-          RUNNING       -> Wind Down + Stop enabled, Start disabled
-          WINDING DOWN  -> Stop only
-          CB PAUSED     -> Wind Down + Stop enabled, Reset CB enabled
+          STOPPED       -> Start enabled (interactive), others disabled (grey)
+          RUNNING       -> Start shows 'Running' (active glow), Wind Down + Stop interactive
+          WINDING DOWN  -> Wind Down shows 'Winding Down...' (active glow), Stop interactive
+          CB PAUSED     -> Start shows 'CB Paused' (active glow, orange), Wind Down + Stop + Reset CB
+
+        The active-state button uses a coloured border + tinted background
+        so the user can tell the current state just from the buttons.
 
         Emergency Stop is ALWAYS enabled.
         """
         self._trading_state = state
 
+        # Reusable interactive styles
+        green = self._t5_btn_interactive(C['green'], '#1a3a1a', '#0a2a0a')
+        yellow = self._t5_btn_interactive(C['yellow'], '#3a3500', '#2a2500')
+        red = self._t5_btn_interactive(C['red'], '#3a1a1a', '#2a0a0a')
+        disabled = self._t5_btn_disabled()
+        reset_style = self._t5_reset_interactive()
+        reset_disabled = self._t5_btn_disabled()
+
         if state == "STOPPED":
+            self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(True)
+            self._btn_start.setStyleSheet(green)
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(False)
+            self._btn_wind_down.setStyleSheet(disabled)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(False)
+            self._btn_stop.setStyleSheet(disabled)
+
             self._btn_reset_cb.setEnabled(False)
+            self._btn_reset_cb.setStyleSheet(reset_disabled)
+
         elif state == "RUNNING":
+            self._btn_start.setText("\u25cf  Running")
             self._btn_start.setEnabled(False)
+            self._btn_start.setStyleSheet(
+                self._t5_btn_active(C['green'], '#0a2a0a')
+            )
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(True)
+            self._btn_wind_down.setStyleSheet(yellow)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(True)
+            self._btn_stop.setStyleSheet(red)
+
             self._btn_reset_cb.setEnabled(False)
+            self._btn_reset_cb.setStyleSheet(reset_disabled)
+
         elif state == "WINDING DOWN":
+            self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(False)
+            self._btn_start.setStyleSheet(disabled)
+
+            self._btn_wind_down.setText("\u25cf  Winding Down\u2026")
             self._btn_wind_down.setEnabled(False)
+            self._btn_wind_down.setStyleSheet(
+                self._t5_btn_active(C['yellow'], '#2a2500')
+            )
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(True)
+            self._btn_stop.setStyleSheet(red)
+
             self._btn_reset_cb.setEnabled(False)
+            self._btn_reset_cb.setStyleSheet(reset_disabled)
+
         elif state == "CB PAUSED":
+            self._btn_start.setText("\u25cf  CB Paused")
             self._btn_start.setEnabled(False)
+            self._btn_start.setStyleSheet(
+                self._t5_btn_active(C['peach'], '#2a1a0a')
+            )
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(True)
+            self._btn_wind_down.setStyleSheet(yellow)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(True)
+            self._btn_stop.setStyleSheet(red)
+
             self._btn_reset_cb.setEnabled(True)
+            self._btn_reset_cb.setStyleSheet(reset_style)
+
         else:
             # Unknown state -- disable all except emergency
+            self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(False)
+            self._btn_start.setStyleSheet(disabled)
+
+            self._btn_wind_down.setText("Wind Down")
             self._btn_wind_down.setEnabled(False)
+            self._btn_wind_down.setStyleSheet(disabled)
+
+            self._btn_stop.setText("Stop Now")
             self._btn_stop.setEnabled(False)
+            self._btn_stop.setStyleSheet(disabled)
+
             self._btn_reset_cb.setEnabled(False)
+            self._btn_reset_cb.setStyleSheet(reset_disabled)
 
         # Emergency Stop is ALWAYS enabled, regardless of state
         self._btn_emergency.setEnabled(True)
