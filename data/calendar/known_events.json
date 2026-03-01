@@ -1,0 +1,252 @@
+{
+    "year": 2026,
+    "description": "Static high-impact economic calendar for 2026. Used as fallback when MQL5 bridge or CSV calendar is unavailable. London Fix and COMEX times are deterministic and not listed individually.",
+    "recurring": {
+        "london_fix_am": {
+            "time_utc": "10:30",
+            "days": "weekdays",
+            "note": "London Gold Fix AM. Actual time is 10:30 London local time; UTC offset varies with BST (UTC+1 from last Sunday March to last Sunday October)."
+        },
+        "london_fix_pm": {
+            "time_utc": "15:00",
+            "days": "weekdays",
+            "note": "London Gold Fix PM. Actual time is 15:00 London local time; UTC offset varies with BST."
+        },
+        "comex_open": {
+            "time_utc": "13:20",
+            "days": "weekdays",
+            "note": "COMEX gold futures open. Actual time is 08:20 New York local time; UTC offset varies with EDT (UTC-4 from 2nd Sunday March to 1st Sunday November)."
+        },
+        "comex_close": {
+            "time_utc": "18:00",
+            "days": "weekdays",
+            "note": "COMEX gold futures close. Actual time is 13:30 New York local time; UTC offset varies with EDT."
+        }
+    },
+    "events": [
+        {
+            "date": "2026-01-02",
+            "time_utc": "13:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-01-14",
+            "time_utc": "13:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-01-28",
+            "time_utc": "19:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-02-06",
+            "time_utc": "13:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-02-11",
+            "time_utc": "13:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-03-06",
+            "time_utc": "13:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-03-11",
+            "time_utc": "13:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-03-18",
+            "time_utc": "19:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-04-03",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-04-14",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-05-01",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-05-06",
+            "time_utc": "18:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-05-13",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-06-05",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-06-10",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-06-17",
+            "time_utc": "18:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-07-03",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-07-14",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-07-29",
+            "time_utc": "18:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-08-07",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-08-12",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-09-04",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-09-15",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-09-16",
+            "time_utc": "18:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-10-02",
+            "time_utc": "12:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-10-13",
+            "time_utc": "12:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-11-04",
+            "time_utc": "19:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-11-06",
+            "time_utc": "13:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-11-10",
+            "time_utc": "13:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-12-04",
+            "time_utc": "13:30",
+            "name": "Non-Farm Payrolls",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-12-10",
+            "time_utc": "13:30",
+            "name": "CPI",
+            "importance": "HIGH",
+            "currency": "USD"
+        },
+        {
+            "date": "2026-12-16",
+            "time_utc": "19:00",
+            "name": "FOMC Rate Decision",
+            "importance": "HIGH",
+            "currency": "USD"
+        }
+    ]
+}

@@ -1,0 +1,111 @@
+# =============================================================================
+# Spartus Live Dashboard -- User Configuration
+# =============================================================================
+# Edit this file to override defaults defined in live_config.py.
+# Any key you omit here keeps its default value.
+# Nested sections are flattened automatically (e.g. risk.max_risk_pct -> max_risk_pct).
+# =============================================================================
+
+# --- Model ------------------------------------------------------------------
+# Leave empty to auto-discover the first .zip in model/ directory.
+# Set explicitly only if you have multiple models and want a specific one.
+# model_path: "model/spartus_champion_W170.zip"
+model_path: ""
+
+# --- MT5 --------------------------------------------------------------------
+mt5_symbol: "XAUUSD"
+# mt5_terminal_path: "C:/Program Files/MetaTrader 5/terminal64.exe"
+
+# --- Symbol mapping (Dukascopy name -> your MT5 broker symbol) --------------
+# Adjust if your broker uses different names (e.g. US500 -> USA500).
+symbol_map:
+  EURUSD: "EURUSD"
+  XAGUSD: "XAGUSD"
+  USDJPY: "USDJPY"
+  US500:  "US500"
+  USOIL:  "USOIL"
+
+# --- Risk -------------------------------------------------------------------
+risk:
+  max_risk_pct: 0.02          # Max 2% of equity per trade
+  max_dd: 0.10                # 10% total drawdown limit
+  max_daily_dd: 0.03          # 3% daily drawdown limit
+  daily_trade_hard_cap: 20    # Absolute max trades per day
+  min_hold_bars: 3            # Minimum bars before closing (3 x M5 = 15 min)
+  direction_threshold: 0.3    # |direction| must exceed this to open
+  exit_threshold: 0.5         # exit_urgency must exceed this to close
+
+# --- Circuit breakers -------------------------------------------------------
+circuit_breakers:
+  consecutive_loss_pause: 3           # Pause after N consecutive losses
+  consecutive_loss_pause_minutes: 30  # ... for this many minutes
+  severe_loss_pause: 5                # Hard pause after N losses
+  severe_loss_pause_minutes: 120      # ... for this many minutes
+  daily_dd_halt_pct: 0.02             # Halt new trades at 2% daily DD
+  daily_dd_close_all_pct: 0.03        # Close ALL positions at 3% daily DD
+  weekly_dd_halt_pct: 0.05            # Halt for the week at 5% weekly DD
+
+# --- Weekend ----------------------------------------------------------------
+weekend:
+  friday_close_utc_hour: 20           # Close all positions by 20:00 UTC Friday
+  friday_block_new_utc_hour: 19       # Block new trades from 19:00 UTC Friday
+  monday_resume_utc_hour: 0           # Resume trading Monday at 00:30 UTC
+  monday_resume_utc_minute: 30
+
+# --- Feature pipeline -------------------------------------------------------
+features:
+  warmup_bars: 500
+  norm_window: 200
+  norm_clip: 5.0
+  frame_stack: 10
+
+# --- Calendar ---------------------------------------------------------------
+calendar:
+  # Leave empty to auto-detect from MT5 (recommended).
+  # The CalendarBridge EA writes to MT5's Common Files folder.
+  calendar_bridge_path: ""
+  calendar_csv_path: "data/calendar/economic_calendar.csv"
+  calendar_static_path: "data/calendar/known_events.json"
+  calendar_bridge_max_age_s: 7200     # Max age before stale (2 hours)
+
+# --- Paper trading ----------------------------------------------------------
+paper_trading: true
+
+# --- Observation period (set enabled: true to activate) ---------------------
+observation:
+  observation_period_enabled: false
+  observation_period_days: 14
+  observation_lot_cap: 0.01
+
+# --- Post-rounding risk cap ------------------------------------------------
+post_rounding:
+  enable_post_rounding_risk_cap: false
+  post_rounding_risk_cap: 1.5
+  absolute_risk_cap_pct: 0.03
+
+# --- Daily reset ------------------------------------------------------------
+daily_reset_utc_hour: 0
+
+# --- Logging ----------------------------------------------------------------
+logging:
+  log_every_action: true
+  log_observations_every_n_bars: 12
+  log_feature_stats: true
+
+# --- Analytics & drift detection --------------------------------------------
+analytics:
+  feature_drift_threshold_sigma: 2.0
+  corr_drift_yellow_threshold: 0.15
+  corr_drift_red_threshold: 0.25
+  corr_drift_yellow_persist: 3
+  corr_drift_red_persist: 2
+  action_flat_rate_warn: 0.90
+  action_std_collapse_warn: 0.10
+  weekly_report_auto: true
+  retrain_trigger_pf_weeks: 3
+
+# --- Normalizer persistence -------------------------------------------------
+normalizer:
+  normalizer_state_path: "storage/state/normalizer_state.json"
+  normalizer_backup_interval_s: 3600
+  normalizer_max_age_s: 3600

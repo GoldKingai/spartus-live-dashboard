@@ -1,0 +1,10 @@
+# Spartus Live Trading Dashboard - Dependencies
+MetaTrader5>=5.0.45
+PyQt6>=6.5
+pyqtgraph>=0.13
+numpy>=1.24
+pandas>=2.0
+stable-baselines3>=2.1
+torch>=2.0
+ta>=0.11
+PyYAML>=6.0

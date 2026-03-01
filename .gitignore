@@ -1,0 +1,47 @@
+# =============================================================================
+# Spartus Live Trading Dashboard -- .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Runtime storage (regenerated at startup) ---
+# Ignore contents but keep directory structure via .gitkeep
+storage/logs/*
+storage/memory/*
+storage/state/*
+storage/screenshots/*
+storage/reports/weekly/*
+!storage/reports/weekly/.gitkeep
+storage/models/*.zip
+storage/models/*.meta.json
+
+# Keep .gitkeep files
+!storage/**/.gitkeep
+
+# --- OS files ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Environment / secrets ---
+.env
+*.env
+credentials.json

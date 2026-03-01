@@ -1,0 +1,26 @@
+[project]
+name = "spartus-live-dashboard"
+version = "1.0.0"
+description = "AI-powered live trading dashboard for XAUUSD on MetaTrader 5"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary"}
+
+dependencies = [
+    "MetaTrader5>=5.0.45",
+    "PyQt6>=6.5",
+    "pyqtgraph>=0.13",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "stable-baselines3>=2.1",
+    "torch>=2.0",
+    "ta>=0.11",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+spartus-dashboard = "main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
