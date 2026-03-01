@@ -109,52 +109,97 @@ CalendarBridge EA             |                                          |
 
 ---
 
-## Training Results
+## Training & Validation Report
 
-The SAC model was trained on **10+ years of XAUUSD M5 data** (2015-2026), processing 194 simulated weeks across 4 parallel environments. The best checkpoint was saved at **week 160** based on validation performance.
+**Champion Checkpoint: Week 170** | Final Evaluation: 2026-03-01 | Locked Single-Pass Test
 
-### Overall Performance (25,516 trades)
+The SAC model was trained on **12+ years of XAUUSD M5 data** using a strictly chronological train/validation/test split with purge gaps and causal normalisation:
+
+| Split | Period | Purpose |
+|---|---|---|
+| **Train (70%)** | 2015 -- 2022 | Model learning |
+| **Validation (15%)** | 2022 -- 2024 | Checkpoint selection & hyperparameter tuning |
+| **Locked Test (15%)** | 2024 -- 2026 | Single-pass, never-seen evaluation |
+
+2-week purge gaps between splits prevent data leakage. Training included variable spread simulation, adverse slippage modelling, domain randomisation per episode, and a 14-scenario stress matrix.
+
+### Training Evolution (~200 weeks)
+
+| Phase | Weeks | Behaviour |
+|---|---|---|
+| **Survival** | 0 -- 100 | Stabilisation, early losses, risk control learned |
+| **Edge Discovery** | 100 -- 150 | Profit factor crossed >1.5 on validation |
+| **Optimisation** | 150 -- 170 | Peak robustness and risk-adjusted returns |
+| **Over-Optimisation** | 170 -- 194 | Aggression drift detected, performance degraded under stress |
+
+Week 170 was identified as the structural optimum before overfitting began.
+
+### Champion Checkpoint -- Week 170
+
+**Validation Set (87 weeks -- unseen during training):**
+
+| Metric | Base | 2x Spread | 3x Spread | 2x Slippage | Combined |
+|---|---|---|---|---|---|
+| **Profit Factor** | 2.238 | 2.013 | 1.629 | 2.165 | 1.801 |
+| **Max Drawdown** | 20.8% | 35.8% | 47.3% | 19.5% | 32.2% |
 
 | Metric | Value |
 |---|---|
-| **Total trades** | 25,516 |
-| **Win rate** | 47.3% |
-| **Profit factor** | 1.81 |
-| **Reward:Risk ratio** | 2.02x |
-| **Avg winning trade** | $151.24 |
-| **Avg losing trade** | -$74.78 |
-| **Largest win** | $10,622.15 |
-| **Trade direction** | 52% Long / 48% Short (balanced) |
-| **Avg hold time** | 30 minutes (median: 20 min) |
-| **Exit methods** | 50% SL hit, 25% Agent close, 24% TP hit |
+| **Sharpe Ratio** | 4.091 |
+| **Trades** | 1,044 |
+| **Time in Market** | 8.9% |
 
-### Mature Model Performance (Weeks 140-194)
+The model remained profitable even under severe execution friction (3x spread, doubled slippage).
 
-After the initial learning phase, the model's mature performance stabilised:
+**Locked Test Set (84 weeks -- never seen during training):**
+
+Single-pass evaluation. No tuning, no second chances.
+
+| Metric | Base | 2x Spread |
+|---|---|---|
+| **Profit Factor** | 2.818 | 2.163 |
+| **Max Drawdown** | 13.6% | 18.8% |
 
 | Metric | Value |
 |---|---|
-| **Trades** | 15,657 |
-| **Win rate** | 51.4% |
-| **Profit factor** | 1.82 |
-| **Reward:Risk** | 1.72x |
+| **Sharpe Ratio** | 4.215 |
+| **Trades** | 481 |
+| **Time in Market** | 0.6% |
 
-### Training Progression
+Test set performance **exceeded** validation -- confirming strong out-of-sample generalisation and execution resilience.
 
-The model learned to trade profitably through pure reinforcement learning -- no hardcoded rules or strategies:
+### Why Week 170, Not Later?
 
-| Week | Trades | P/L | Win Rate | Phase |
-|---|---|---|---|---|
-| 0 | 210 | -$94 | 16% | Exploration (random actions) |
-| 30 | 19 | +$10 | 42% | First profitable week |
-| 60 | 38 | +$15 | 45% | Learning consolidation |
-| 130 | 192 | +$99 | 46% | Consistent profitability |
-| 150 | 215 | +$747 | 60% | Model maturation |
-| 160 | 299 | +$1,184 | 56% | **Best checkpoint (champion)** |
-| 170 | 267 | +$2,216 | 49% | Sustained performance |
-| 190 | 359 | +$66,755 | 53% | Peak scaling |
+Later checkpoints (W180, W191, W194) were evaluated. Continued training led to over-optimisation:
 
-> **Note:** These are training simulation results, not live trading results. Past performance in simulation does not guarantee future live results. Always start with paper trading to validate the model's performance on your broker before risking real capital.
+| Metric | W170 | W194 |
+|---|---|---|
+| **Validation PF** | 2.238 | 1.986 |
+| **2x Spread PF** | 2.013 | 1.373 |
+| **Combined Stress MaxDD** | 32.2% | 84.3% |
+
+W170 was selected as champion because it maximises robustness, not raw returns.
+
+### Key Properties of the Champion
+
+- Regime-adaptive (performs across volatility quartiles)
+- Spread-resilient (profitable under doubled and tripled spreads)
+- Slippage-robust (adverse fill simulation had minimal impact)
+- Low test drawdown (13.6%)
+- Controlled trade frequency (not overtrading)
+- Direction-balanced (long/short adaptable, not locked to one side)
+- Overfitting detection built into checkpoint selection
+
+### Robustness Monitoring (Live)
+
+The champion model package includes baselines for real-time drift detection:
+
+- **54-feature distribution baseline** -- alerts when features deviate >2 sigma from training
+- **20-feature correlation baseline** -- Frobenius norm monitoring for regime shifts
+- **Execution cost comparison** -- spread/slippage vs training assumptions
+- **Behaviour drift tracking** -- time-in-market, trades/day, risk cap utilisation
+
+> **Note:** These are training and validation results, not live trading results. Past performance does not guarantee future results. Always start with paper trading to validate the model on your broker before risking real capital.
 
 ---
 
