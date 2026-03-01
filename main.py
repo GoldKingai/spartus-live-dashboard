@@ -184,6 +184,11 @@ class SpartusOrchestrator:
         self._initial_balance: float = 0.0
         self._peak_balance: float = 0.0
 
+        # ---- Heartbeat / market status ----
+        self._last_heartbeat_time: float = 0.0
+        self._bars_since_heartbeat: int = 0
+        self._market_status: str = "INITIALIZING"  # OPEN, CLOSED, INITIALIZING
+
         # ---- History buffers for dashboard ----
         self._balance_history: deque = deque(maxlen=5000)
         self._action_history: deque = deque(maxlen=500)
@@ -645,10 +650,12 @@ class SpartusOrchestrator:
         if not self._connection_monitor.is_connected():
             conn_status = self._connection_monitor.check_connection()
             if not conn_status.get("connected", False):
+                self._market_status = "DISCONNECTED"
                 return  # Wait for reconnection
 
         # Check for new M5 bar
         if not self._is_new_bar():
+            self._emit_heartbeat_if_due()
             return
 
         self._step_count += 1
@@ -912,12 +919,66 @@ class SpartusOrchestrator:
 
             if bar_time > self._last_bar_time:
                 self._last_bar_time = bar_time
+                self._market_status = "OPEN"
+                self._bars_since_heartbeat += 1
                 return True
 
             return False
         except Exception:
             log.exception("Error checking for new bar")
             return False
+
+    # ------------------------------------------------------------------
+    # Heartbeat -- feedback when market is closed or no new bars
+    # ------------------------------------------------------------------
+
+    _HEARTBEAT_INTERVAL_S = 60  # emit a heartbeat alert every 60 seconds
+
+    def _emit_heartbeat_if_due(self) -> None:
+        """Emit periodic heartbeat alerts so the user knows the loop is alive.
+
+        Called every 5s when _is_new_bar() returns False.  Only logs
+        an alert every _HEARTBEAT_INTERVAL_S seconds to avoid spam.
+        """
+        now = time.monotonic()
+
+        # First heartbeat after state change
+        if self._last_heartbeat_time == 0.0:
+            self._last_heartbeat_time = now
+
+        elapsed = now - self._last_heartbeat_time
+        if elapsed < self._HEARTBEAT_INTERVAL_S:
+            return
+
+        self._last_heartbeat_time = now
+
+        # Determine market status
+        is_market_open = False
+        try:
+            is_market_open = self._mt5_bridge.is_market_open()
+        except Exception:
+            pass
+
+        if is_market_open:
+            self._market_status = "OPEN"
+            # Market is open but no new bar yet -- normal between candles
+            msg = (
+                f"Heartbeat: market OPEN, waiting for next M5 bar "
+                f"(last bar: {self._last_bar_time.strftime('%H:%M UTC') if self._last_bar_time else 'none'}, "
+                f"bars processed: {self._step_count})"
+            )
+        else:
+            self._market_status = "CLOSED"
+            msg = (
+                f"Heartbeat: market CLOSED, waiting for market open "
+                f"(last bar: {self._last_bar_time.strftime('%Y-%m-%d %H:%M UTC') if self._last_bar_time else 'none'})"
+            )
+
+        # Only add alert if executor is in RUNNING state
+        executor_state = getattr(self._executor, '_state', None)
+        if executor_state is not None and executor_state.value == "running":
+            self._add_alert("INFO", msg)
+            log.info(msg)
 
     def _periodic_tasks(self) -> None:
         """Run periodic maintenance tasks: normalizer save, daily reset, etc."""
@@ -1117,12 +1178,23 @@ class SpartusOrchestrator:
         # Decisions
         decisions = list(self._decision_log)
 
+        # Market status
+        market = {
+            "status": self._market_status,
+            "last_bar_time": (
+                self._last_bar_time.strftime("%Y-%m-%d %H:%M UTC")
+                if self._last_bar_time else "--"
+            ),
+            "bars_processed": self._step_count,
+        }
+
         return {
             "connection": connection,
             "account": account_data,
             "position": position_data,
             "today": today_data,
             "decisions": decisions,
+            "market": market,
         }
 
     def _prepare_performance_data(self) -> Dict[str, Any]:

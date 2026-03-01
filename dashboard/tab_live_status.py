@@ -117,8 +117,23 @@ class LiveStatusTab(QWidget):
         self._lbl_spread = _make_label("-- pips", C["text"])
         layout.addWidget(self._lbl_spread, 3, 1)
 
+        # Market status
+        layout.addWidget(_make_label("Market:"), 4, 0)
+        self._lbl_market_status = _make_label("--", C["label"])
+        layout.addWidget(self._lbl_market_status, 4, 1)
+
+        # Last bar / bars processed
+        layout.addWidget(_make_label("Last Bar:"), 5, 0)
+        self._lbl_last_bar = _make_label("--", C["text"])
+        layout.addWidget(self._lbl_last_bar, 5, 1)
+
+        # Bars processed
+        layout.addWidget(_make_label("Bars:"), 6, 0)
+        self._lbl_bars_processed = _make_label("0", C["text"])
+        layout.addWidget(self._lbl_bars_processed, 6, 1)
+
         # Push content to the top
-        layout.setRowStretch(4, 1)
+        layout.setRowStretch(7, 1)
 
         return box
 
@@ -259,6 +274,7 @@ class LiveStatusTab(QWidget):
             return
 
         self._update_connection(data.get("connection", {}))
+        self._update_market_status(data.get("market", {}))
         self._update_account(data.get("account", {}))
         self._update_position(data.get("position"))
         self._update_summary(data.get("today", {}))
@@ -301,6 +317,31 @@ class LiveStatusTab(QWidget):
             self._lbl_spread.setText(f"{spread:.1f} pips")
         else:
             self._lbl_spread.setText("-- pips")
+
+    def _update_market_status(self, market: dict) -> None:
+        """Update market status (OPEN / CLOSED / INITIALIZING) and last bar info."""
+        if not market:
+            return
+
+        status = market.get("status", "INITIALIZING")
+        status_colors = {
+            "OPEN": C["green"],
+            "CLOSED": C["yellow"],
+            "DISCONNECTED": C["red"],
+            "INITIALIZING": C["label"],
+        }
+        color = status_colors.get(status, C["label"])
+        self._lbl_market_status.setText(status)
+        self._lbl_market_status.setStyleSheet(
+            f"color: {color}; font-size: 13px; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+
+        last_bar = market.get("last_bar_time", "--")
+        self._lbl_last_bar.setText(str(last_bar))
+
+        bars = market.get("bars_processed", 0)
+        self._lbl_bars_processed.setText(str(bars))
 
     def _update_account(self, acct: dict) -> None:
         """Update account info panel."""
