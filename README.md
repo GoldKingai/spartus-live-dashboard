@@ -109,6 +109,55 @@ CalendarBridge EA             |                                          |
 
 ---
 
+## Training Results
+
+The SAC model was trained on **10+ years of XAUUSD M5 data** (2015-2026), processing 194 simulated weeks across 4 parallel environments. The best checkpoint was saved at **week 160** based on validation performance.
+
+### Overall Performance (25,516 trades)
+
+| Metric | Value |
+|---|---|
+| **Total trades** | 25,516 |
+| **Win rate** | 47.3% |
+| **Profit factor** | 1.81 |
+| **Reward:Risk ratio** | 2.02x |
+| **Avg winning trade** | $151.24 |
+| **Avg losing trade** | -$74.78 |
+| **Largest win** | $10,622.15 |
+| **Trade direction** | 52% Long / 48% Short (balanced) |
+| **Avg hold time** | 30 minutes (median: 20 min) |
+| **Exit methods** | 50% SL hit, 25% Agent close, 24% TP hit |
+
+### Mature Model Performance (Weeks 140-194)
+
+After the initial learning phase, the model's mature performance stabilised:
+
+| Metric | Value |
+|---|---|
+| **Trades** | 15,657 |
+| **Win rate** | 51.4% |
+| **Profit factor** | 1.82 |
+| **Reward:Risk** | 1.72x |
+
+### Training Progression
+
+The model learned to trade profitably through pure reinforcement learning -- no hardcoded rules or strategies:
+
+| Week | Trades | P/L | Win Rate | Phase |
+|---|---|---|---|---|
+| 0 | 210 | -$94 | 16% | Exploration (random actions) |
+| 30 | 19 | +$10 | 42% | First profitable week |
+| 60 | 38 | +$15 | 45% | Learning consolidation |
+| 130 | 192 | +$99 | 46% | Consistent profitability |
+| 150 | 215 | +$747 | 60% | Model maturation |
+| 160 | 299 | +$1,184 | 56% | **Best checkpoint (champion)** |
+| 170 | 267 | +$2,216 | 49% | Sustained performance |
+| 190 | 359 | +$66,755 | 53% | Peak scaling |
+
+> **Note:** These are training simulation results, not live trading results. Past performance in simulation does not guarantee future live results. Always start with paper trading to validate the model's performance on your broker before risking real capital.
+
+---
+
 ## Quick Start
 
 ### Requirements
