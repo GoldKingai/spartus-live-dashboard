@@ -4,6 +4,12 @@
 
 Built on deep reinforcement learning (Soft Actor-Critic), Spartus processes 67 real-time features across technical analysis, correlated instruments, economic events, market microstructure, and regime detection -- then executes trades with multi-layered risk management through a professional PyQt6 dashboard.
 
+### Live Status -- Real-time trading overview
+![Live Status Tab](docs/screenshots/tab1_live_status.png)
+
+### Model & Features -- AI model health and correlated instrument feeds
+![Model Features Tab](docs/screenshots/tab4_model_features.png)
+
 ---
 
 ## What It Does
