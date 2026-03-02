@@ -509,6 +509,8 @@ class LiveStatusTab(QWidget):
             "TRAIL_SL": C["cyan"],
             "MODIFY": C["cyan"],
             "SKIP": C["label"],
+            "FLAT": C["label"],
+            "BELOW_THRESHOLD": C["label"],
         }
 
         # Decisions are expected newest-first; ActionLogWidget.add_entry
@@ -519,7 +521,15 @@ class LiveStatusTab(QWidget):
             action = entry.get("action", "")
             details = entry.get("details", "")
 
-            color = _ACTION_COLORS.get(action.upper(), C["text"])
+            action_upper = action.upper()
+            if action_upper in _ACTION_COLORS:
+                color = _ACTION_COLORS[action_upper]
+            elif action_upper.startswith("WK_BLOCKED"):
+                color = C["yellow"]
+            elif action_upper.startswith("CB_BLOCKED"):
+                color = "#ff8800"  # orange
+            else:
+                color = C["text"]
             text = f"{action} {details}".strip() if details else action
 
             self._decision_log.add_entry(ts, text, color)

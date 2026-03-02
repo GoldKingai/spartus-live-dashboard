@@ -188,6 +188,7 @@ class SpartusOrchestrator:
         self._last_heartbeat_time: float = 0.0
         self._bars_since_heartbeat: int = 0
         self._market_status: str = "INITIALIZING"  # OPEN, CLOSED, INITIALIZING
+        self._last_block_reason: str = ""  # Track last safety block reason for alert dedup
 
         # ---- History buffers for dashboard ----
         self._balance_history: deque = deque(maxlen=5000)
@@ -873,8 +874,29 @@ class SpartusOrchestrator:
         # --- Alert on trade events ---
         if decision.startswith("OPEN_"):
             self._add_alert("INFO", f"Opened {decision[5:]} position")
+            self._last_block_reason = ""  # Clear block tracking on trade
         elif decision.startswith("CLOSE_"):
             self._add_alert("INFO", f"Closed position: {decision}")
+            self._last_block_reason = ""
+        elif decision.startswith("WK_BLOCKED_") or decision.startswith("CB_BLOCKED_"):
+            # Alert on first block or when reason changes (avoid spam)
+            block_reason = decision.split("_", 2)[-1] if "_" in decision else decision
+            if block_reason != self._last_block_reason:
+                self._last_block_reason = block_reason
+                if decision.startswith("WK_BLOCKED_"):
+                    self._add_alert(
+                        "WARN",
+                        f"Weekend manager blocking trades: {block_reason} "
+                        f"(AI active: dir={action['direction']:+.2f} conv={action['conviction']:.2f})",
+                    )
+                else:
+                    self._add_alert(
+                        "WARN",
+                        f"Circuit breaker blocking trades: {block_reason}",
+                    )
+        elif decision in ("HOLD", "FLAT", "BELOW_THRESHOLD"):
+            # Normal non-trade decisions -- clear block tracking
+            self._last_block_reason = ""
 
         # --- Dashboard trading state sync ---
         executor_state = self._executor.get_state()
