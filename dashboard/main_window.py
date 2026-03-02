@@ -133,6 +133,9 @@ class LiveDashboard(QMainWindow):
         self._model_info = model_info or {}
         log.info("Dashboard components injected")
 
+        # Re-evaluate button states now that components are available
+        self._update_button_states()
+
     # ------------------------------------------------------------------
     # Header bar
     # ------------------------------------------------------------------
