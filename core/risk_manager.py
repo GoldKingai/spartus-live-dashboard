@@ -113,14 +113,22 @@ class LiveRiskManager:
         peak_balance: float,
         atr: float,
         symbol_info: Dict,
+        *,
+        side: str = "BUY",
+        entry_price: float = 0.0,
+        mt5_calc_profit=None,
     ) -> float:
         """Calculate position size based on conviction and risk budget.
 
-        Lot-sizing formula (MT5-exact, identical to training):
+        When *mt5_calc_profit* is provided, uses MT5's own
+        ``order_calc_profit()`` for exact account-currency P/L instead
+        of the manual ``tick_value / tick_size`` approximation.
+
+        Lot-sizing formula:
             risk_amount = balance * max_risk_pct * conviction * dd_multiplier
             sl_distance = max(2.5 - conviction, 1.0) * atr
-            value_per_point = tick_value / tick_size
-            lots = risk_amount / (sl_distance * value_per_point)
+            lots = risk_amount / mt5_calc_profit(side, lots=1, sl_distance)
+                   (or fallback: risk_amount / (sl_distance * tick_value/tick_size))
 
         Drawdown reduction:
             DD >= 10% -> lots = 0 (emergency stop)
@@ -133,6 +141,10 @@ class LiveRiskManager:
             peak_balance: Highest balance achieved.
             atr: Current ATR(14) value.
             symbol_info: Dict with tick_value, tick_size, volume_min/max/step.
+            side: "BUY" or "SELL" (for MT5 calc direction).
+            entry_price: Current price (for MT5 calc; 0 = skip MT5 calc).
+            mt5_calc_profit: Optional callable(side, lots, open, close) -> float.
+                If provided, used for exact P/L instead of tick_value formula.
 
         Returns:
             Position size in lots (0.0 if risk budget exhausted).
@@ -163,11 +175,42 @@ class LiveRiskManager:
         sl_atr_mult = max(2.5 - conviction, 1.0)  # min_sl_atr = 1.0
         sl_distance = sl_atr_mult * atr
 
-        # Lots -- MT5-exact value_per_point for account-currency conversion
-        tick_value = symbol_info.get("trade_tick_value", 1.0)
-        tick_size = symbol_info.get("trade_tick_size", 0.01)
-        value_per_point = tick_value / tick_size
-        raw_lots = risk_amount / (sl_distance * value_per_point)
+        # --- Compute value_per_point using MT5 API when available ---
+        use_mt5 = (
+            mt5_calc_profit is not None
+            and entry_price > 0
+        )
+
+        if use_mt5:
+            # Ask MT5: "what is the P/L for 1 lot moving sl_distance points?"
+            if side.upper() == "BUY":
+                sl_price = entry_price - sl_distance
+            else:
+                sl_price = entry_price + sl_distance
+
+            loss_1lot = mt5_calc_profit(side, 1.0, entry_price, sl_price)
+            if loss_1lot is not None and loss_1lot != 0:
+                value_per_point = abs(loss_1lot) / sl_distance
+                raw_lots = risk_amount / abs(loss_1lot)
+                logger.debug(
+                    "MT5-exact lot sizing: 1-lot SL loss=%.4f %s, "
+                    "value_per_point=%.4f, raw_lots=%.6f",
+                    abs(loss_1lot),
+                    self.cfg.__class__.__name__,
+                    value_per_point,
+                    raw_lots,
+                )
+            else:
+                # MT5 calc failed -- fall back to manual
+                logger.warning("MT5 calc_profit returned %s, falling back to manual", loss_1lot)
+                use_mt5 = False
+
+        if not use_mt5:
+            # Fallback: manual tick_value / tick_size formula
+            tick_value = symbol_info.get("trade_tick_value", 1.0)
+            tick_size = symbol_info.get("trade_tick_size", 0.01)
+            value_per_point = tick_value / tick_size
+            raw_lots = risk_amount / (sl_distance * value_per_point)
 
         # Clamp to broker limits
         vol_min = symbol_info.get("volume_min", 0.01)
@@ -178,9 +221,17 @@ class LiveRiskManager:
         if raw_lots < vol_min * 0.5:
             if self.cfg.allow_min_lot_override and raw_lots > 0:
                 # Small account: risk budget can't afford vol_min, but we
-                # still trade at vol_min.  The actual risk will exceed
-                # max_risk_pct -- acceptable for demo / micro accounts.
-                actual_risk_pct = (vol_min * sl_distance * value_per_point) / balance * 100
+                # still trade at vol_min.  Log the actual risk using MT5 calc.
+                if use_mt5 and entry_price > 0:
+                    if side.upper() == "BUY":
+                        sl_price = entry_price - sl_distance
+                    else:
+                        sl_price = entry_price + sl_distance
+                    loss_min = mt5_calc_profit(side, vol_min, entry_price, sl_price)
+                    actual_risk_pct = (abs(loss_min) / balance * 100) if loss_min else 0
+                else:
+                    actual_risk_pct = (vol_min * sl_distance * value_per_point) / balance * 100
+
                 logger.warning(
                     "Min-lot override: raw=%.6f < min=%.4f.  "
                     "Forcing vol_min -- actual risk=%.1f%% of balance",
@@ -198,7 +249,16 @@ class LiveRiskManager:
 
         # --- Optional post-rounding risk cap ---
         if self.cfg.enable_post_rounding_risk_cap:
-            actual_risk = lots * sl_distance * value_per_point
+            if use_mt5 and entry_price > 0:
+                if side.upper() == "BUY":
+                    sl_price = entry_price - sl_distance
+                else:
+                    sl_price = entry_price + sl_distance
+                actual_risk_abs = mt5_calc_profit(side, lots, entry_price, sl_price)
+                actual_risk = abs(actual_risk_abs) if actual_risk_abs else lots * sl_distance * value_per_point
+            else:
+                actual_risk = lots * sl_distance * value_per_point
+
             risk_cap_abs = balance * self.cfg.absolute_risk_cap_pct
             ratio_cap = risk_amount * self.cfg.post_rounding_risk_cap
             max_allowed_risk = min(risk_cap_abs, ratio_cap)
@@ -212,8 +272,8 @@ class LiveRiskManager:
 
         logger.debug(
             "Lot sizing: conviction=%.3f dd=%.2f%% dd_mult=%.2f "
-            "risk=$%.2f sl_dist=%.2f lots=%.2f",
-            conviction, dd * 100, dd_mult, risk_amount, sl_distance, lots,
+            "risk=%.2f sl_dist=%.2f lots=%.2f (mt5_exact=%s)",
+            conviction, dd * 100, dd_mult, risk_amount, sl_distance, lots, use_mt5,
         )
 
         return lots

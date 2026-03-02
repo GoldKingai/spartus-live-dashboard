@@ -632,6 +632,133 @@ class MT5Bridge:
         return results
 
     # ------------------------------------------------------------------
+    # MT5 calculators (exact, account-currency-aware)
+    # ------------------------------------------------------------------
+
+    def calc_profit(
+        self,
+        side: str,
+        symbol: str,
+        lots: float,
+        price_open: float,
+        price_close: float,
+    ) -> float | None:
+        """Calculate exact profit/loss using MT5's built-in calculator.
+
+        This uses the MT5 terminal's internal currency conversion rates
+        and is always accurate for the account currency.
+
+        Args:
+            side:        "BUY" or "SELL".
+            symbol:      Canonical symbol name (e.g. "XAUUSD").
+            lots:        Volume in lots.
+            price_open:  Entry price.
+            price_close: Exit price.
+
+        Returns:
+            Profit/loss in account currency, or None on failure.
+        """
+        order_type = (
+            mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
+            else mt5.ORDER_TYPE_SELL
+        )
+        broker_sym = self._broker_name(symbol)
+        result = mt5.order_calc_profit(
+            order_type, broker_sym, lots, price_open, price_close,
+        )
+        if result is None:
+            log.warning(
+                "calc_profit failed: %s %s %.4f lots %s->%s",
+                side, broker_sym, lots, price_open, price_close,
+            )
+        return result
+
+    def calc_margin(
+        self,
+        side: str,
+        symbol: str,
+        lots: float,
+        price: float,
+    ) -> float | None:
+        """Calculate exact margin requirement using MT5's built-in calculator.
+
+        Args:
+            side:   "BUY" or "SELL".
+            symbol: Canonical symbol name.
+            lots:   Volume in lots.
+            price:  Current price.
+
+        Returns:
+            Margin required in account currency, or None on failure.
+        """
+        order_type = (
+            mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
+            else mt5.ORDER_TYPE_SELL
+        )
+        broker_sym = self._broker_name(symbol)
+        result = mt5.order_calc_margin(
+            order_type, broker_sym, lots, price,
+        )
+        if result is None:
+            log.warning(
+                "calc_margin failed: %s %s %.4f lots @ %s",
+                side, broker_sym, lots, price,
+            )
+        return result
+
+    def order_check(
+        self,
+        symbol: str,
+        side: str,
+        lots: float,
+        price: float,
+        sl: float = 0.0,
+        tp: float = 0.0,
+    ) -> Dict[str, Any] | None:
+        """Pre-flight check an order without placing it.
+
+        Uses MT5's order_check() to verify margin, limits, and validity.
+
+        Returns:
+            Dict with retcode, margin, margin_free, margin_level, comment,
+            or None on failure.
+        """
+        broker_sym = self._broker_name(symbol)
+        order_type = (
+            mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
+            else mt5.ORDER_TYPE_SELL
+        )
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": broker_sym,
+            "volume": float(lots),
+            "type": order_type,
+            "price": float(price),
+            "sl": float(sl),
+            "tp": float(tp),
+            "deviation": 20,
+            "magic": MAGIC_NUMBER,
+            "comment": "spartus_check",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_check(request)
+        if result is None:
+            log.warning("order_check failed: %s", mt5.last_error())
+            return None
+
+        return {
+            "retcode": result.retcode,
+            "margin": result.margin,
+            "margin_free": result.margin_free,
+            "margin_level": result.margin_level,
+            "comment": result.comment,
+            "profit": result.profit,
+        }
+
+    # ------------------------------------------------------------------
     # Market status
     # ------------------------------------------------------------------
 

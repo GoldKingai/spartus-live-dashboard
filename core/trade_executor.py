@@ -246,8 +246,9 @@ class TradeExecutor:
             )
             return f"BLOCKED_{reason}"
 
-        # 3. Lot sizing
+        # 3. Lot sizing (using MT5-exact profit calculator)
         atr = self._current_atr
+        current_price = bar.get("close", 0.0)
         symbol_info = self._bridge.get_symbol_info(self._config.mt5_symbol)
         if not symbol_info:
             log.warning("Cannot get symbol_info for lot sizing")
@@ -262,12 +263,23 @@ class TradeExecutor:
             "volume_step": symbol_info.get("volume_step", 0.01),
         }
 
+        # Build MT5 calc_profit callback for exact account-currency math
+        _symbol = self._config.mt5_symbol
+
+        def _mt5_calc(calc_side, calc_lots, open_price, close_price):
+            return self._bridge.calc_profit(
+                calc_side, _symbol, calc_lots, open_price, close_price,
+            )
+
         lots = self._risk.calculate_lot_size(
             conviction=conviction,
             balance=balance,
             peak_balance=self._peak_balance,
             atr=atr,
             symbol_info=lot_info,
+            side=mt5_side,
+            entry_price=current_price,
+            mt5_calc_profit=_mt5_calc,
         )
 
         if lots <= 0:
@@ -275,9 +287,46 @@ class TradeExecutor:
             return "LOTS_ZERO"
 
         # 4. SL / TP
-        current_price = bar.get("close", 0.0)
         sl_price = self._risk.calculate_sl(side, current_price, atr, conviction)
         tp_price = self._risk.calculate_tp(side, current_price, atr, conviction)
+
+        # 4b. Pre-flight: verify margin with MT5 order_check
+        preflight = self._bridge.order_check(
+            symbol=self._config.mt5_symbol,
+            side=mt5_side,
+            lots=lots,
+            price=current_price,
+            sl=sl_price,
+            tp=tp_price,
+        )
+        if preflight is not None:
+            if preflight["retcode"] != 0:
+                log.warning(
+                    "Order pre-flight REJECTED: %s (margin=%.2f free=%.2f)",
+                    preflight["comment"],
+                    preflight.get("margin", 0),
+                    preflight.get("margin_free", 0),
+                )
+                return f"BLOCKED_preflight_{preflight['comment']}"
+
+            # Log exact margin from MT5
+            log.info(
+                "Pre-flight OK: lots=%.2f margin=%.2f margin_free=%.2f margin_level=%.1f%%",
+                lots,
+                preflight.get("margin", 0),
+                preflight.get("margin_free", 0),
+                preflight.get("margin_level", 0),
+            )
+
+            # Also compute and log exact SL loss from MT5
+            sl_loss = self._bridge.calc_profit(
+                mt5_side, self._config.mt5_symbol, lots, current_price, sl_price,
+            )
+            if sl_loss is not None:
+                log.info(
+                    "MT5-exact risk: lots=%.2f SL_loss=%.2f (%.1f%% of balance)",
+                    lots, abs(sl_loss), abs(sl_loss) / balance * 100 if balance else 0,
+                )
 
         # 5. Send market order
         comment = f"spartus_{side.lower()}_{conviction:.2f}"
