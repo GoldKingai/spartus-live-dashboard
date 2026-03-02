@@ -50,6 +50,8 @@ _mql5_cache_time: float = 0.0          # monotonic timestamp
 _mql5_cache_mtime: float = 0.0         # file mtime when last read
 _MQL5_CACHE_TTL_S: float = 60.0        # re-check file at most every 60s
 _MQL5_MAX_AGE_S: float = 7200.0        # reject JSON older than 2 hours
+_csv_persist_time: float = 0.0         # last CSV persist monotonic timestamp
+_CSV_PERSIST_INTERVAL_S: float = 900.0 # persist bridge events to CSV every 15 min
 
 
 def compute_calendar_features(
@@ -124,7 +126,7 @@ def _load_events(
     Performance: MQL5 JSON is cached for 60s to avoid file I/O every bar.
     Staleness: MQL5 JSON older than 2 hours is rejected (falls back to CSV).
     """
-    global _mql5_cache, _mql5_cache_time, _mql5_cache_mtime
+    global _mql5_cache, _mql5_cache_time, _mql5_cache_mtime, _csv_persist_time
 
     import time as _time
 
@@ -180,6 +182,19 @@ def _load_events(
                 _mql5_cache_time = now_mono  # don't retry for 60s
 
         if _mql5_cache:
+            # Persist bridge events to CSV periodically (every 15 min)
+            if calendar_csv_path and now_mono - _csv_persist_time > _CSV_PERSIST_INTERVAL_S:
+                try:
+                    added = persist_bridge_events_to_csv(_mql5_cache, calendar_csv_path)
+                    if added > 0:
+                        import logging as _logging
+                        _logging.getLogger(__name__).info(
+                            "Persisted %d new bridge events to CSV: %s",
+                            added, calendar_csv_path,
+                        )
+                except Exception:
+                    pass
+                _csv_persist_time = now_mono
             return _mql5_cache
 
     # Tier 2: User CSV (skip if no events are AFTER the current timestamp,
@@ -216,6 +231,60 @@ def _load_events(
 
     # Tier 4: No events
     return []
+
+
+def persist_bridge_events_to_csv(
+    events: List[Dict],
+    csv_path: Path,
+) -> int:
+    """Append MQL5 bridge events to the CSV calendar, deduplicating.
+
+    This keeps the CSV fresh so that even if the MQL5 bridge stops,
+    recent events are already persisted locally.
+
+    Returns:
+        Number of new events appended.
+    """
+    if not events:
+        return 0
+
+    # Load existing CSV events (if any)
+    existing_keys: set = set()
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(csv_path, encoding="utf-8")
+            for _, row in df.iterrows():
+                existing_keys.add((str(row.get("date", "")), str(row.get("event_name", ""))))
+        except Exception:
+            pass
+
+    # Find new events not already in CSV
+    new_rows: list = []
+    for e in events:
+        dt = e["datetime_utc"]
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TZ_UTC)
+        date_str = dt.strftime("%Y-%m-%d")
+        time_str = dt.strftime("%H:%M")
+        name = e.get("event_name", "")
+        key = (date_str, name)
+        if key not in existing_keys:
+            new_rows.append({
+                "date": date_str,
+                "time_utc": time_str,
+                "event_name": name,
+                "currency": "USD",  # bridge filters to major currencies
+                "impact": "HIGH",
+            })
+            existing_keys.add(key)
+
+    if new_rows:
+        new_df = pd.DataFrame(new_rows)
+        # Append to CSV (create if needed)
+        header = not csv_path.exists() or csv_path.stat().st_size == 0
+        new_df.to_csv(csv_path, mode="a", index=False, header=header, encoding="utf-8")
+
+    return len(new_rows)
 
 
 def load_calendar_csv(csv_path: Path) -> pd.DataFrame:
