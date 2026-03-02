@@ -3,7 +3,10 @@
 IDENTICAL to training calendar_features.py logic.
 All features are EXEMPT from z-score normalization (bounded/binary).
 
-3-tier calendar source: MQL5 bridge JSON > User CSV > Static known events > neutral defaults.
+Calendar source priority:
+    1. MQL5 bridge JSON (live from MT5, optional — auto-persists to CSV)
+    2. Pre-loaded events (auto-generated + CSV + static JSON, merged at startup)
+    3. Neutral defaults (no events)
 
 Features:
     - hours_to_next_high_impact: hours until next high-impact event / 48, clipped [0, 1]
@@ -64,11 +67,10 @@ def compute_calendar_features(
 
     IDENTICAL to training calendar_features.calc_calendar_features logic.
 
-    3-tier calendar source priority:
-        1. MQL5 bridge JSON (live events from MT5)
-        2. User-provided CSV file
-        3. Directly passed calendar_events list
-        4. Neutral defaults (no events)
+    Calendar source priority:
+        1. MQL5 bridge JSON (live from MT5, optional)
+        2. Pre-loaded events (auto-generated + CSV + static, merged at startup)
+        3. Neutral defaults (no events)
 
     Args:
         timestamp: UTC datetime for the current bar.
@@ -197,35 +199,8 @@ def _load_events(
                 _csv_persist_time = now_mono
             return _mql5_cache
 
-    # Tier 2: User CSV (skip if no events are AFTER the current timestamp,
-    # because forward-looking features need future events to be useful)
-    if calendar_csv_path and calendar_csv_path.exists():
-        try:
-            df = load_calendar_csv(calendar_csv_path)
-            events = []
-            for row in df.itertuples(index=False):
-                dt_val = row.datetime_utc
-                if hasattr(dt_val, "to_pydatetime"):
-                    dt_val = dt_val.to_pydatetime()
-                events.append({
-                    "datetime_utc": dt_val,
-                    "event_name": getattr(row, "event_name", ""),
-                    "impact": "HIGH",
-                })
-            # Check if CSV has any future events (within next 7 days)
-            now_utc = datetime.now(_TZ_UTC)
-            horizon = now_utc + timedelta(days=7)
-            has_future = any(
-                now_utc < (e["datetime_utc"].replace(tzinfo=_TZ_UTC) if e["datetime_utc"].tzinfo is None else e["datetime_utc"]) <= horizon
-                for e in events
-            )
-            if has_future:
-                return events
-            # else: CSV has no future events, fall through to Tier 3
-        except Exception:
-            pass
-
-    # Tier 3: Pre-loaded events
+    # Tier 2: Pre-loaded events (auto-generated + CSV + static, merged at startup)
+    # This is the primary source — always has future events from the auto-generator.
     if calendar_events:
         return [e for e in calendar_events if e.get("impact", "").upper() == "HIGH"]
 

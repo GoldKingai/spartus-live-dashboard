@@ -772,26 +772,37 @@ class LiveFeaturePipeline:
     def _load_calendar_events(self) -> None:
         """Load calendar events from configured sources.
 
-        Priority: CSV (full history) > known_events.json (static 2026).
-        The MQL5 bridge JSON is not loaded here; it's read per-bar
-        in compute_calendar_features() with caching.
+        Priority:
+            1. Auto-generated events (NFP, CPI, FOMC, ECB, ISM — rule-based)
+            2. CSV (user-supplied / bridge-persisted history)
+            3. known_events.json (static fallback)
+        All sources are merged and deduplicated.
+        The MQL5 bridge JSON (if present) is still read per-bar in
+        compute_calendar_features() and new events are auto-persisted to CSV.
         """
         import json as _json
-
-        # Load and MERGE calendar events: CSV + static JSON
-        # CSV may have rich history but lack future events; static JSON
-        # has projected 2026 events.  Merge both so the AI always sees
-        # upcoming events even if the CSV hasn't been updated recently.
         from datetime import datetime as _dt
         from zoneinfo import ZoneInfo as _ZI
         _utc = _ZI("UTC")
 
+        # --- Source 1: Auto-generated events (always available, no deps) ---
+        auto_events: list = []
+        try:
+            from features.calendar_generator import generate_upcoming_events
+            auto_events = generate_upcoming_events(months_ahead=6)
+            log.info(
+                "Calendar auto-gen: %d events (next 6 months)",
+                len(auto_events),
+            )
+        except Exception as exc:
+            log.warning("Calendar auto-gen failed: %s", exc)
+
+        # --- Source 2: CSV (historical + bridge-persisted events) ---
         csv_events: list = []
         csv_path = self._resolve_path(self._config.calendar_csv_path)
         if csv_path.exists():
             try:
                 from features.calendar import load_calendar_csv
-
                 df = load_calendar_csv(csv_path)
                 for row in df.itertuples(index=False):
                     dt = row.datetime_utc
@@ -803,7 +814,7 @@ class LiveFeaturePipeline:
                         "impact": "HIGH",
                     })
                 log.info(
-                    "Calendar CSV: %d high-impact events (%s to %s)",
+                    "Calendar CSV: %d events (%s to %s)",
                     len(csv_events),
                     csv_events[0]["datetime_utc"].date() if csv_events else "?",
                     csv_events[-1]["datetime_utc"].date() if csv_events else "?",
@@ -811,6 +822,7 @@ class LiveFeaturePipeline:
             except Exception as exc:
                 log.warning("Failed to load calendar CSV: %s", exc)
 
+        # --- Source 3: Static JSON (legacy fallback) ---
         static_events: list = []
         static_path = self._resolve_path(self._config.calendar_static_path)
         if static_path.exists():
@@ -830,44 +842,38 @@ class LiveFeaturePipeline:
                         "event_name": ev.get("name", ""),
                         "impact": ev.get("importance", "HIGH").upper(),
                     })
-                log.info(
-                    "Static calendar: %d events (%s to %s)",
-                    len(static_events),
-                    static_events[0]["datetime_utc"].date() if static_events else "?",
-                    static_events[-1]["datetime_utc"].date() if static_events else "?",
-                )
             except Exception as exc:
                 log.warning("Failed to load static calendar: %s", exc)
 
-        # Merge: start with CSV, add static events not already covered
-        # Dedup key = (date, event_name)
-        if csv_events or static_events:
-            seen = set()
-            merged = []
-            for e in csv_events:
+        # --- Merge all sources (dedup by date + event_name) ---
+        # Priority: auto-gen first, then CSV, then static
+        seen: set = set()
+        merged: list = []
+        sources = [
+            (auto_events, "auto"),
+            (csv_events, "csv"),
+            (static_events, "static"),
+        ]
+        counts = {"auto": 0, "csv": 0, "static": 0}
+        for events, label in sources:
+            for e in events:
                 key = (e["datetime_utc"].date(), e["event_name"])
                 if key not in seen:
                     seen.add(key)
                     merged.append(e)
-            added = 0
-            for e in static_events:
-                key = (e["datetime_utc"].date(), e["event_name"])
-                if key not in seen:
-                    seen.add(key)
-                    merged.append(e)
-                    added += 1
-            merged.sort(key=lambda e: e["datetime_utc"])
-            self._calendar_events = merged
+                    counts[label] += 1
 
-            now_utc = _dt.now(_utc)
-            future_count = sum(
-                1 for e in merged if e["datetime_utc"] > now_utc
-            )
-            log.info(
-                "Calendar merged: %d total events (%d from CSV, %d added "
-                "from static), %d upcoming",
-                len(merged), len(csv_events), added, future_count,
-            )
+        merged.sort(key=lambda e: e["datetime_utc"])
+        self._calendar_events = merged
+
+        now_utc = _dt.now(_utc)
+        future_count = sum(1 for e in merged if e["datetime_utc"] > now_utc)
+        log.info(
+            "Calendar ready: %d events (%d auto-gen, %d csv, %d static), "
+            "%d upcoming",
+            len(merged), counts["auto"], counts["csv"], counts["static"],
+            future_count,
+        )
 
     # ------------------------------------------------------------------
     # Public accessors
