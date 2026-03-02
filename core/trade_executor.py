@@ -458,10 +458,14 @@ class TradeExecutor:
         )
 
         # Only modify if the SL actually moved (avoid unnecessary API calls)
+        # Use tick_size as threshold so it scales to any instrument
+        tick_size = self._bridge.get_symbol_info(self._config.mt5_symbol).get(
+            "tick_size", 0.01
+        )
         sl_changed = False
-        if pos["side"] == "LONG" and new_sl > current_sl + 0.001:
+        if pos["side"] == "LONG" and new_sl > current_sl + tick_size:
             sl_changed = True
-        elif pos["side"] == "SHORT" and new_sl < current_sl - 0.001:
+        elif pos["side"] == "SHORT" and new_sl < current_sl - tick_size:
             sl_changed = True
 
         if sl_changed:
@@ -471,11 +475,21 @@ class TradeExecutor:
             )
             if success:
                 pos["sl"] = new_sl
-                log.debug(
+
+                # Log MT5-exact P/L at the new SL level
+                mt5_side = "BUY" if pos["side"] == "LONG" else "SELL"
+                sl_pnl = self._bridge.calc_profit(
+                    mt5_side, self._config.mt5_symbol,
+                    pos["lots"], pos["entry_price"], new_sl,
+                )
+                sl_pnl_str = f"  SL_pnl={sl_pnl:.2f}" if sl_pnl is not None else ""
+
+                log.info(
                     "TRAIL_SL: ticket=%d  %s  sl %.2f -> %.2f  "
-                    "sl_adj=%.3f  bars_held=%d",
+                    "sl_adj=%.3f  bars_held=%d%s",
                     pos["ticket"], pos["side"],
                     current_sl, new_sl, sl_adjustment, bars_held,
+                    sl_pnl_str,
                 )
                 return f"TRAIL_SL_{new_sl:.2f}"
 

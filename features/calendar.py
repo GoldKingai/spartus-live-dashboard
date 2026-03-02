@@ -182,7 +182,8 @@ def _load_events(
         if _mql5_cache:
             return _mql5_cache
 
-    # Tier 2: User CSV
+    # Tier 2: User CSV (skip if no events are AFTER the current timestamp,
+    # because forward-looking features need future events to be useful)
     if calendar_csv_path and calendar_csv_path.exists():
         try:
             df = load_calendar_csv(calendar_csv_path)
@@ -196,7 +197,16 @@ def _load_events(
                     "event_name": getattr(row, "event_name", ""),
                     "impact": "HIGH",
                 })
-            return events
+            # Check if CSV has any future events (within next 7 days)
+            now_utc = datetime.now(_TZ_UTC)
+            horizon = now_utc + timedelta(days=7)
+            has_future = any(
+                now_utc < (e["datetime_utc"].replace(tzinfo=_TZ_UTC) if e["datetime_utc"].tzinfo is None else e["datetime_utc"]) <= horizon
+                for e in events
+            )
+            if has_future:
+                return events
+            # else: CSV has no future events, fall through to Tier 3
         except Exception:
             pass
 
