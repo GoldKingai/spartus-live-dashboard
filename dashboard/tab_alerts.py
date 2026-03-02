@@ -97,6 +97,7 @@ class AlertsTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._prev_alerts: list = []
 
         # Current trading state (used for button enable/disable logic)
         self._trading_state: str = "STOPPED"
@@ -456,6 +457,11 @@ class AlertsTab(QWidget):
         """
         if alerts is None:
             return
+
+        # Skip rebuild if alerts haven't changed (preserves text selection)
+        if alerts == self._prev_alerts:
+            return
+        self._prev_alerts = list(alerts)
 
         # Build HTML content (newest first)
         html_lines = []

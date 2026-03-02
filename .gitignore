@@ -33,6 +33,10 @@ storage/reports/weekly/*
 storage/models/*.zip
 storage/models/*.meta.json
 
+# --- Deployed model binaries (large, not version-controlled) ---
+model/*.zip
+model/*.meta.json
+
 # Keep .gitkeep files
 !storage/**/.gitkeep
 

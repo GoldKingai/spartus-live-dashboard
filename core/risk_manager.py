@@ -9,6 +9,7 @@ so account-currency conversion is handled automatically.
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Dict, Tuple
 
@@ -96,8 +97,8 @@ class LiveRiskManager:
             # Pause expired
             self._pause_until = None
 
-        # Conviction threshold
-        if conviction < self.cfg.direction_threshold:
+        # Conviction threshold (separate from direction_threshold)
+        if conviction < self.cfg.min_conviction:
             return False, "low_conviction"
 
         return True, "ok"
@@ -216,64 +217,119 @@ class LiveRiskManager:
         vol_min = symbol_info.get("volume_min", 0.01)
         vol_max = symbol_info.get("volume_max", 100.0)
         vol_step = symbol_info.get("volume_step", 0.01)
+        point = symbol_info.get("point", 0.01)
+
+        # Compute SL price for risk-cap checks
+        if side.upper() == "BUY":
+            sl_price = entry_price - sl_distance
+        else:
+            sl_price = entry_price + sl_distance
+
+        # --- Diagnostic logging ---
+        logger.info(
+            "LOT_SIZING: conv=%.3f  ATR=%.4f  SL_mult=%.2f  "
+            "SL_dist=%.2f price (%.0f pts)  entry=%.2f  sl_price=%.2f  "
+            "risk_budget=%.2f  raw_lots=%.6f  vol_min=%.4f",
+            conviction, atr, sl_atr_mult,
+            sl_distance, sl_distance / point, entry_price, sl_price,
+            risk_amount, raw_lots, vol_min,
+        )
 
         raw_lots = max(raw_lots, 0.0)
-        if raw_lots < vol_min * 0.5:
-            if self.cfg.allow_min_lot_override and raw_lots > 0:
-                # Small account: risk budget can't afford vol_min, but we
-                # still trade at vol_min.  Log the actual risk using MT5 calc.
-                if use_mt5 and entry_price > 0:
-                    if side.upper() == "BUY":
-                        sl_price = entry_price - sl_distance
-                    else:
-                        sl_price = entry_price + sl_distance
-                    loss_min = mt5_calc_profit(side, vol_min, entry_price, sl_price)
-                    actual_risk_pct = (abs(loss_min) / balance * 100) if loss_min else 0
-                else:
-                    actual_risk_pct = (vol_min * sl_distance * value_per_point) / balance * 100
 
-                logger.warning(
-                    "Min-lot override: raw=%.6f < min=%.4f.  "
-                    "Forcing vol_min -- actual risk=%.1f%% of balance",
-                    raw_lots, vol_min, actual_risk_pct,
+        # --- Safe min-lot promotion ---
+        # When raw_lots < vol_min, check if vol_min is still within the
+        # risk cap.  If so, promote to vol_min ("small guy can start small").
+        # This replaces both the old dangerous override AND the blanket skip.
+        if raw_lots < vol_min:
+            if raw_lots <= 0:
+                logger.debug("Lot size zero -- trade skipped")
+                return 0.0
+
+            # Compute worst-case SL loss at vol_min
+            if use_mt5 and entry_price > 0:
+                loss_minlot_raw = mt5_calc_profit(
+                    side, vol_min, entry_price, sl_price,
+                )
+                loss_minlot = abs(loss_minlot_raw) if loss_minlot_raw else (
+                    vol_min * sl_distance * value_per_point
+                )
+            else:
+                loss_minlot = vol_min * sl_distance * value_per_point
+
+            risk_cap_abs = balance * self.cfg.absolute_risk_cap_pct
+
+            logger.info(
+                "MIN-LOT CHECK: raw_lots=%.6f < vol_min=%.4f  |  "
+                "loss_at_vol_min=%.2f  risk_cap=%.2f (%.1f%%)  "
+                "risk_budget=%.2f",
+                raw_lots, vol_min, loss_minlot, risk_cap_abs,
+                self.cfg.absolute_risk_cap_pct * 100, risk_amount,
+            )
+
+            if loss_minlot <= risk_cap_abs:
+                # Safe min-lot promotion: vol_min is within the hard cap
+                logger.info(
+                    "SAFE MIN-LOT PROMOTION: %.6f -> %.4f  "
+                    "(loss=%.2f <= cap=%.2f, %.1f%% of balance)",
+                    raw_lots, vol_min, loss_minlot,
+                    risk_cap_abs, loss_minlot / balance * 100,
                 )
                 raw_lots = vol_min
             else:
-                return 0.0  # Too far below minimum -- risk budget exhausted
+                # Even vol_min exceeds the absolute risk cap -> SKIP
+                logger.warning(
+                    "SKIP: vol_min=%.4f exceeds risk cap.  "
+                    "loss_minlot=%.2f (%.1f%%) > cap=%.2f (%.1f%%).  "
+                    "Balance too small for this ATR.",
+                    vol_min, loss_minlot, loss_minlot / balance * 100,
+                    risk_cap_abs, self.cfg.absolute_risk_cap_pct * 100,
+                )
+                return 0.0
 
-        raw_lots = max(raw_lots, vol_min)  # Round up to min lot
         raw_lots = min(raw_lots, vol_max)
 
-        # Round to step
-        lots = round(raw_lots / vol_step) * vol_step
+        # Floor to step (never round UP into higher risk)
+        lots = math.floor(raw_lots / vol_step) * vol_step
+        lots = max(lots, vol_min)  # Ensure at least vol_min after floor
 
-        # --- Optional post-rounding risk cap ---
-        if self.cfg.enable_post_rounding_risk_cap:
-            if use_mt5 and entry_price > 0:
-                if side.upper() == "BUY":
-                    sl_price = entry_price - sl_distance
-                else:
-                    sl_price = entry_price + sl_distance
-                actual_risk_abs = mt5_calc_profit(side, lots, entry_price, sl_price)
-                actual_risk = abs(actual_risk_abs) if actual_risk_abs else lots * sl_distance * value_per_point
-            else:
-                actual_risk = lots * sl_distance * value_per_point
+        # --- Hard post-rounding risk cap (always enforced) ---
+        # Compute actual worst-case SL loss at the rounded lot size.
+        if use_mt5 and entry_price > 0:
+            actual_risk_abs = mt5_calc_profit(side, lots, entry_price, sl_price)
+            actual_risk = abs(actual_risk_abs) if actual_risk_abs else lots * sl_distance * value_per_point
+        else:
+            actual_risk = lots * sl_distance * value_per_point
 
-            risk_cap_abs = balance * self.cfg.absolute_risk_cap_pct
-            ratio_cap = risk_amount * self.cfg.post_rounding_risk_cap
-            max_allowed_risk = min(risk_cap_abs, ratio_cap)
-            if actual_risk > max_allowed_risk:
-                lots = max_allowed_risk / (sl_distance * value_per_point)
-                lots = round(lots / vol_step) * vol_step
-                lots = max(lots, vol_min)
+        risk_cap_abs = balance * self.cfg.absolute_risk_cap_pct
+        if actual_risk > risk_cap_abs:
+            # Try to reduce lots to fit within the hard cap
+            target_lots = risk_cap_abs / (sl_distance * value_per_point)
+            target_lots = math.floor(target_lots / vol_step) * vol_step
+            if target_lots >= vol_min:
                 logger.info(
-                    "Post-rounding risk cap applied: lots reduced to %.2f", lots,
+                    "Post-rounding risk cap: lots %.2f -> %.2f "
+                    "(risk %.2f > cap %.2f)",
+                    lots, target_lots, actual_risk, risk_cap_abs,
                 )
+                lots = target_lots
+            else:
+                # Even vol_min exceeds the absolute risk cap -> SKIP trade
+                actual_risk_pct = actual_risk / balance * 100 if balance > 0 else 0
+                logger.warning(
+                    "SKIP: vol_min=%.4f exceeds risk cap.  "
+                    "actual_risk=%.2f (%.1f%%) > cap=%.2f (%.1f%%).  "
+                    "Balance too small for this ATR.",
+                    vol_min, actual_risk, actual_risk_pct,
+                    risk_cap_abs, self.cfg.absolute_risk_cap_pct * 100,
+                )
+                return 0.0
 
-        logger.debug(
-            "Lot sizing: conviction=%.3f dd=%.2f%% dd_mult=%.2f "
-            "risk=%.2f sl_dist=%.2f lots=%.2f (mt5_exact=%s)",
-            conviction, dd * 100, dd_mult, risk_amount, sl_distance, lots, use_mt5,
+        logger.info(
+            "LOT_SIZING RESULT: lots=%.4f  actual_risk=%.2f (%.1f%%)  "
+            "cap=%.2f (%.1f%%)  mt5_exact=%s",
+            lots, actual_risk, actual_risk / balance * 100 if balance > 0 else 0,
+            risk_cap_abs, self.cfg.absolute_risk_cap_pct * 100, use_mt5,
         )
 
         return lots

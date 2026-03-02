@@ -9,9 +9,10 @@ from PyQt6.QtWidgets import (
     QLabel, QGroupBox, QVBoxLayout, QHBoxLayout,
     QWidget, QFrame, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QTextEdit,
+    QMenu, QApplication,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QKeySequence, QAction
 import pyqtgraph as pg
 import numpy as np
 
@@ -128,6 +129,7 @@ class ActionLogWidget(QWidget):
         super().__init__(parent)
         self._max_lines = max_lines
         self._entries: list[str] = []
+        self._last_html: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -157,23 +159,79 @@ class ActionLogWidget(QWidget):
         if len(self._entries) > self._max_lines:
             self._entries = self._entries[: self._max_lines]
 
-        self._text.setHtml("<br>".join(self._entries))
+        new_html = "<br>".join(self._entries)
+        if new_html != self._last_html:
+            self._text.setHtml(new_html)
+            self._last_html = new_html
 
     def clear(self) -> None:
         """Clear all log entries."""
         self._entries.clear()
+        self._last_html = ""
         self._text.clear()
+
+
+# ---------------------------------------------------------------------------
+# CopyableTableWidget
+# ---------------------------------------------------------------------------
+
+class CopyableTableWidget(QTableWidget):
+    """QTableWidget with Ctrl+A / Ctrl+C and right-click Copy support.
+
+    Drop-in replacement for QTableWidget in read-only dashboard panels.
+    """
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection()
+        elif event.matches(QKeySequence.StandardKey.SelectAll):
+            self.selectAll()
+        else:
+            super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        copy_action = QAction("Copy", self)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.triggered.connect(self._copy_selection)
+        menu.addAction(copy_action)
+
+        select_all_action = QAction("Select All", self)
+        select_all_action.setShortcut(QKeySequence.StandardKey.SelectAll)
+        select_all_action.triggered.connect(self.selectAll)
+        menu.addAction(select_all_action)
+
+        menu.exec(event.globalPos())
+
+    def _copy_selection(self) -> None:
+        """Copy selected cells to clipboard as tab-separated text."""
+        selection = self.selectedRanges()
+        if not selection:
+            return
+
+        rows: list[str] = []
+        for sel_range in selection:
+            for row in range(sel_range.topRow(), sel_range.bottomRow() + 1):
+                cells: list[str] = []
+                for col in range(sel_range.leftColumn(), sel_range.rightColumn() + 1):
+                    item = self.item(row, col)
+                    cells.append(item.text() if item else "")
+                rows.append("\t".join(cells))
+
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText("\n".join(rows))
 
 
 # ---------------------------------------------------------------------------
 # TradeTable
 # ---------------------------------------------------------------------------
 
-class TradeTable(QTableWidget):
+class TradeTable(CopyableTableWidget):
     """Table widget for displaying trade history.
 
     Rows are inserted at the top so the most recent trade is always
-    visible without scrolling.
+    visible without scrolling.  Inherits copy/select from CopyableTableWidget.
     """
 
     def __init__(self, columns: list[str], parent=None):

@@ -107,17 +107,18 @@ class LiveConfig:
     daily_trade_hard_cap: int = 20
     min_hold_bars: int = 3
     direction_threshold: float = 0.3
+    min_conviction: float = 0.15          # Separate conviction floor (model output compressed)
     exit_threshold: float = 0.5
-    allow_min_lot_override: bool = True  # Allow trading at vol_min when risk budget < vol_min (small accounts)
+    allow_min_lot_override: bool = False  # Disabled: min-lot must still pass hard risk cap
 
     # ---- Circuit breakers ------------------------------------------------
-    consecutive_loss_pause: int = 3
-    consecutive_loss_pause_minutes: int = 30
-    severe_loss_pause: int = 5
-    severe_loss_pause_minutes: int = 120
-    daily_dd_halt_pct: float = 0.02
-    daily_dd_close_all_pct: float = 0.03
-    weekly_dd_halt_pct: float = 0.05
+    consecutive_loss_pause: int = 5
+    consecutive_loss_pause_minutes: int = 15
+    severe_loss_pause: int = 8
+    severe_loss_pause_minutes: int = 60
+    daily_dd_halt_pct: float = 0.05
+    daily_dd_close_all_pct: float = 0.08
+    weekly_dd_halt_pct: float = 0.10
 
     # ---- Weekend ---------------------------------------------------------
     friday_close_utc_hour: int = 20
@@ -148,10 +149,17 @@ class LiveConfig:
     observation_period_days: int = 14
     observation_lot_cap: float = 0.01
 
-    # ---- Post-rounding risk cap (off by default) -------------------------
-    enable_post_rounding_risk_cap: bool = False
+    # ---- Post-rounding risk cap (always on) --------------------------------
+    enable_post_rounding_risk_cap: bool = True
     post_rounding_risk_cap: float = 1.5
     absolute_risk_cap_pct: float = 0.03
+
+    # ---- Broker constraints / spread gate -----------------------------------
+    spread_hard_max_points: int = 50       # Block entry if spread > N points
+    spread_spike_multiplier: float = 2.5   # Block if spread > EMA * multiplier
+    min_sl_buffer_points: int = 5          # Buffer above stops_level+spread for SL
+    broker_heavy_refresh_s: int = 600      # Full symbol_info refresh (10 min)
+    broker_light_refresh_s: int = 10       # Spread/tick refresh (10s)
 
     # ---- Daily reset -----------------------------------------------------
     daily_reset_utc_hour: int = 0

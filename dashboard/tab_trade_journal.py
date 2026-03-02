@@ -33,6 +33,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 
 from dashboard.theme import C
+from dashboard.widgets import CopyableTableWidget
 from dashboard import currency
 
 
@@ -177,7 +178,7 @@ class TradeJournalTab(QWidget):
         layout.setSpacing(0)
 
         columns = ["#", "Side", "P/L", "Lesson"]
-        self._trade_table = QTableWidget(0, len(columns))
+        self._trade_table = CopyableTableWidget(0, len(columns))
         self._trade_table.setHorizontalHeaderLabels(columns)
         self._trade_table.setAlternatingRowColors(True)
         self._trade_table.verticalHeader().setVisible(False)

@@ -59,6 +59,7 @@ class LiveStatusTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._prev_decisions: list = []
 
         # ----- Root layout -----
         root = QVBoxLayout(self)
@@ -132,8 +133,37 @@ class LiveStatusTab(QWidget):
         self._lbl_bars_processed = _make_label("0", C["text"])
         layout.addWidget(self._lbl_bars_processed, 6, 1)
 
+        # --- Broker Constraints section ---
+        _broker_hdr = _make_label("BROKER CONSTRAINTS", C["cyan"], bold=True, font_size=11)
+        layout.addWidget(_broker_hdr, 7, 0, 1, 2)
+
+        # Min Lot / Lot Step
+        layout.addWidget(_make_label("Min Lot / Step:"), 8, 0)
+        self._lbl_min_lot = _make_label("-- / --", C["text"])
+        layout.addWidget(self._lbl_min_lot, 8, 1)
+
+        # Stop Level / Freeze Level
+        layout.addWidget(_make_label("Stop/Freeze Lvl:"), 9, 0)
+        self._lbl_stops = _make_label("-- / -- pts", C["text"])
+        layout.addWidget(self._lbl_stops, 9, 1)
+
+        # Tick Value / VPP
+        layout.addWidget(_make_label("Tick Val / VPP:"), 10, 0)
+        self._lbl_tick_vpp = _make_label("-- / --", C["text"])
+        layout.addWidget(self._lbl_tick_vpp, 10, 1)
+
+        # Spread detail (current / EMA / max)
+        layout.addWidget(_make_label("Spread Detail:"), 11, 0)
+        self._lbl_spread_detail = _make_label("-- / -- / --", C["text"])
+        layout.addWidget(self._lbl_spread_detail, 11, 1)
+
+        # Min SL Distance
+        layout.addWidget(_make_label("Min SL Dist:"), 12, 0)
+        self._lbl_min_sl = _make_label("-- pts", C["text"])
+        layout.addWidget(self._lbl_min_sl, 12, 1)
+
         # Push content to the top
-        layout.setRowStretch(7, 1)
+        layout.setRowStretch(13, 1)
 
         return box
 
@@ -279,6 +309,7 @@ class LiveStatusTab(QWidget):
         self._update_position(data.get("position"))
         self._update_summary(data.get("today", {}))
         self._update_decisions(data.get("decisions", []))
+        self._update_broker(data.get("broker"))
 
     # ------------------------------------------------------------------
     # Private update helpers
@@ -492,6 +523,11 @@ class LiveStatusTab(QWidget):
         if not decisions:
             return
 
+        # Skip rebuild if decisions haven't changed (preserves text selection)
+        if decisions == self._prev_decisions:
+            return
+        self._prev_decisions = list(decisions)
+
         # Clear and re-populate so it always reflects the latest snapshot
         self._decision_log.clear()
 
@@ -537,3 +573,48 @@ class LiveStatusTab(QWidget):
             text = f"{action} {details}".strip() if details else action
 
             self._decision_log.add_entry(ts, text, color)
+
+    def _update_broker(self, broker) -> None:
+        """Update broker constraints panel from a BrokerSnapshot."""
+        if broker is None:
+            return
+
+        # Min Lot / Lot Step
+        self._lbl_min_lot.setText(
+            f"{broker.volume_min:.3f} / {broker.volume_step:.3f}"
+        )
+
+        # Stop Level / Freeze Level
+        self._lbl_stops.setText(
+            f"{broker.stops_level} / {broker.freeze_level} pts"
+        )
+
+        # Tick Value / VPP
+        self._lbl_tick_vpp.setText(
+            f"{broker.tick_value:.4f} / {broker.value_per_point:.2f}"
+        )
+
+        # Spread detail: current / EMA / max(1h)
+        spread_color = C["text"]
+        if broker.spread_current_points > 40:
+            spread_color = C["red"]
+        elif broker.spread_current_points > 30:
+            spread_color = C["yellow"]
+        self._lbl_spread_detail.setText(
+            f"{broker.spread_current:.2f} / "
+            f"{broker.spread_ema:.2f} / "
+            f"{broker.spread_max_1h:.2f}"
+        )
+        self._lbl_spread_detail.setStyleSheet(
+            f"color: {spread_color}; font-size: 13px; "
+            f"background: transparent; border: none;"
+        )
+
+        # Min SL Distance
+        min_sl_pts = (
+            int(broker.min_sl_distance / broker.point)
+            if broker.point > 0 else 0
+        )
+        self._lbl_min_sl.setText(
+            f"{broker.min_sl_distance:.2f} ({min_sl_pts} pts)"
+        )

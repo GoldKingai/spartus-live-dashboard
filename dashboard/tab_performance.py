@@ -38,6 +38,7 @@ import pyqtgraph as pg
 import numpy as np
 
 from dashboard.theme import C
+from dashboard.widgets import CopyableTableWidget
 from dashboard import currency
 
 
@@ -178,7 +179,7 @@ class PerformanceTab(QWidget):
         layout.setSpacing(0)
 
         columns = ["#", "Time", "Side", "Lots", "P/L", "Reason"]
-        self._trade_table = QTableWidget(0, len(columns))
+        self._trade_table = CopyableTableWidget(0, len(columns))
         self._trade_table.setHorizontalHeaderLabels(columns)
         self._trade_table.setAlternatingRowColors(True)
         self._trade_table.verticalHeader().setVisible(False)

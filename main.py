@@ -70,6 +70,8 @@ from memory.trading_memory import TradingMemory
 from memory.trend_tracker import TrendTracker
 from memory.trade_analyzer import TradeAnalyzer
 
+from core.broker_constraints import BrokerConstraints
+
 from safety.circuit_breaker import CircuitBreaker
 from safety.weekend_manager import WeekendManager
 from safety.emergency_stop import EmergencyStop
@@ -325,7 +327,14 @@ class SpartusOrchestrator:
         )
         log.info("Trade executor initialized (state=STOPPED)")
 
-        # 10b. Auto-detect MT5 Common Files path for CalendarBridge
+        # 10b. Broker Constraints cache (dynamic, refreshes from MT5)
+        self._broker_constraints = BrokerConstraints(self._config, self._mt5_bridge)
+        self._broker_constraints.heavy_refresh(force=True)
+        self._broker_constraints.light_refresh(force=True)
+        self._executor.set_broker_constraints(self._broker_constraints)
+        log.info("Broker constraints initialized and injected into executor")
+
+        # 10c. Auto-detect MT5 Common Files path for CalendarBridge
         if not self._config.calendar_bridge_path:
             try:
                 _ti = mt5.terminal_info()
@@ -577,7 +586,10 @@ class SpartusOrchestrator:
 
         self._executor.start_trading()
         self._dashboard.set_trading_state(DashState.RUNNING)
-        self._add_alert("INFO", "Trading STARTED")
+        if self._executor.has_position():
+            self._add_alert("INFO", "Trading STARTED (recovered existing position)")
+        else:
+            self._add_alert("INFO", "Trading STARTED")
         log.info("User started trading")
 
     def _on_stop_trading(self) -> None:
@@ -653,6 +665,11 @@ class SpartusOrchestrator:
             if not conn_status.get("connected", False):
                 self._market_status = "DISCONNECTED"
                 return  # Wait for reconnection
+
+        # Refresh broker constraints (self-throttled, returns fast if not due)
+        if hasattr(self, "_broker_constraints") and self._broker_constraints is not None:
+            self._broker_constraints.heavy_refresh()
+            self._broker_constraints.light_refresh()
 
         # Check for new M5 bar
         if not self._is_new_bar():
@@ -745,14 +762,17 @@ class SpartusOrchestrator:
         # --- Update executor ATR ---
         self._executor.update_atr(atr)
 
-        # --- Check circuit breakers ---
+        # --- Check circuit breakers + spread gate ---
         cb_allowed, cb_reason = self._circuit_breaker.should_trade()
         wk_allowed, wk_reason = self._weekend_manager.should_trade()
+        spread_allowed, spread_reason = (True, "ok")
+        if hasattr(self, "_broker_constraints") and self._broker_constraints is not None:
+            spread_allowed, spread_reason = self._broker_constraints.check_spread_gate()
 
         # Update circuit breaker drawdown
         if self._peak_balance > 0:
-            daily_dd = abs(self._risk_manager.daily_pnl) / self._peak_balance
-            weekly_dd = abs(self._risk_manager.weekly_pnl) / self._peak_balance
+            daily_dd = max(0.0, -self._risk_manager.daily_pnl) / self._peak_balance
+            weekly_dd = max(0.0, -self._risk_manager.weekly_pnl) / self._peak_balance
             self._circuit_breaker.update_dd(daily_dd, weekly_dd)
 
         # If circuit breaker triggered close-all
@@ -794,7 +814,7 @@ class SpartusOrchestrator:
             bar_data["low"] = float(m5_bars["low"].iloc[-1])
 
         # Only execute if safety systems allow (or if already in position)
-        if self._executor.has_position() or (cb_allowed and wk_allowed):
+        if self._executor.has_position() or (cb_allowed and wk_allowed and spread_allowed):
             decision = self._executor.execute_action(action, bar_data, account)
         else:
             # Safety systems blocked -- do NOT call execute_action()
@@ -802,6 +822,8 @@ class SpartusOrchestrator:
                 decision = f"CB_BLOCKED_{cb_reason}"
             elif not wk_allowed:
                 decision = f"WK_BLOCKED_{wk_reason}"
+            elif not spread_allowed:
+                decision = f"BLOCKED_{spread_reason}"
             else:
                 decision = "BLOCKED"
 
@@ -841,15 +863,45 @@ class SpartusOrchestrator:
                 "atr": atr,
             })
 
+        # --- Compute minlot risk % and simplified reason for transparency ---
+        _conv = action["conviction"]
+        _sl_dist = max(2.5 - _conv, 1.0) * atr
+        if hasattr(self, "_broker_constraints") and self._broker_constraints and self._broker_constraints.point > 0:
+            _vpp = self._broker_constraints.tick_value / self._broker_constraints.point
+        else:
+            _vpp = 74.6  # fallback GBP VPP
+        _minlot_risk = (0.01 * _sl_dist * _vpp / balance * 100) if balance > 0 else 0.0
+
+        if "OPEN_LONG" in decision or "OPEN_SHORT" in decision:
+            _reason = "PROMOTE"
+        elif decision == "LOTS_ZERO":
+            _reason = "SKIP_CAP"
+        elif "low_conviction" in decision:
+            _reason = "BLOCKED_CONV"
+        elif "high_spread" in decision or "spread_spike" in decision:
+            _reason = "BLOCKED_SPREAD"
+        elif "CB_BLOCKED" in decision:
+            _reason = "CB_BLOCK"
+        elif "WK_BLOCKED" in decision:
+            _reason = "WK_BLOCK"
+        elif decision == "HOLD_FLAT":
+            _reason = "HOLD"
+        elif decision == "AI_STOPPED":
+            _reason = "STOPPED"
+        else:
+            _reason = decision[:15]
+
         # --- Structured per-bar log for full observability ---
         log.info(
             "BAR #%d | price=%.2f atr=%.4f | "
             "dir=%+.3f conv=%.3f exit=%.3f sl=%.3f | "
-            "decision=%s | bal=%.2f eq=%.2f",
+            "decision=%s | minlot_risk=%.1f%% reason=%s | "
+            "bal=%.2f eq=%.2f",
             self._step_count, current_price, atr,
             action["direction"], action["conviction"],
             action["exit_urgency"], action["sl_adjustment"],
-            decision, balance, equity,
+            decision, _minlot_risk, _reason,
+            balance, equity,
         )
 
         # --- Log observation periodically ---
@@ -1237,6 +1289,11 @@ class SpartusOrchestrator:
             "bars_processed": self._step_count,
         }
 
+        # Broker constraints snapshot
+        broker_snapshot = None
+        if hasattr(self, "_broker_constraints") and self._broker_constraints is not None:
+            broker_snapshot = self._broker_constraints.get_snapshot()
+
         return {
             "connection": connection,
             "account": account_data,
@@ -1244,6 +1301,7 @@ class SpartusOrchestrator:
             "today": today_data,
             "decisions": decisions,
             "market": market,
+            "broker": broker_snapshot,
         }
 
     def _prepare_performance_data(self) -> Dict[str, Any]:

@@ -55,7 +55,7 @@ import pyqtgraph as pg
 import numpy as np
 
 from dashboard.theme import C
-from dashboard.widgets import HistogramWidget, SectionHeader
+from dashboard.widgets import HistogramWidget, SectionHeader, CopyableTableWidget
 from dashboard import currency
 
 log = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ def _make_label(text: str, color: str = C["subtext"], bold: bool = False,
 
 def _styled_table(columns: list[str], stretch_last: bool = True) -> QTableWidget:
     """Create a QTableWidget pre-styled to match the dark theme."""
-    table = QTableWidget(0, len(columns))
+    table = CopyableTableWidget(0, len(columns))
     table.setHorizontalHeaderLabels(columns)
     table.setAlternatingRowColors(True)
     table.verticalHeader().setVisible(False)

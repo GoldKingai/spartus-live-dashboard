@@ -113,6 +113,9 @@ class TradeExecutor:
         # --- ATR cache (updated from feature pipeline) ---
         self._current_atr: float = 1.0
 
+        # --- Broker constraints (injected after init) ---
+        self._broker_constraints = None
+
         # --- Trades log file ---
         self._trades_log_path = self._resolve_path("storage/logs/trades.jsonl")
         self._trades_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +128,64 @@ class TradeExecutor:
             self._config.exit_threshold,
             self._config.min_hold_bars,
         )
+
+    # ------------------------------------------------------------------
+    # Broker constraints injection
+    # ------------------------------------------------------------------
+
+    def set_broker_constraints(self, constraints) -> None:
+        """Inject BrokerConstraints for min SL enforcement."""
+        self._broker_constraints = constraints
+
+    # ------------------------------------------------------------------
+    # Position recovery (restart / crash recovery)
+    # ------------------------------------------------------------------
+
+    def recover_from_mt5(self) -> bool:
+        """Check MT5 for existing positions and adopt if found.
+
+        Called when transitioning to RUNNING state.  Picks up positions
+        from a previous session that weren't closed (e.g. dashboard
+        crash, window close without Stop Trading).
+
+        Returns True if a position was recovered.
+        """
+        if self._position is not None:
+            return False  # Already tracking a position
+
+        try:
+            positions = self._bridge.get_open_positions(self._config.mt5_symbol)
+        except Exception:
+            log.exception("recover_from_mt5: failed to query MT5")
+            return False
+
+        if not positions:
+            return False
+
+        pos = positions[0]  # Take first XAUUSD position
+        side = "LONG" if pos.get("type", 0) == 0 else "SHORT"
+
+        self._position = {
+            "ticket": pos["ticket"],
+            "side": side,
+            "entry_price": pos["price_open"],
+            "lots": pos["volume"],
+            "sl": pos.get("sl", 0),
+            "tp": pos.get("tp", 0),
+            "conviction": 0.5,  # Unknown for recovered positions
+        }
+        self._entry_step = self._step_count
+        self._initial_sl = pos.get("sl", 0)
+        self._initial_tp = pos.get("tp", 0)
+        self._max_favorable = 0.0
+
+        log.warning(
+            "RECOVERED position from MT5: ticket=%d %s %.3f lots @ %.2f "
+            "SL=%.2f TP=%.2f  (will manage with conviction=0.5)",
+            pos["ticket"], side, pos["volume"], pos["price_open"],
+            pos.get("sl", 0), pos.get("tp", 0),
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Public API -- main decision loop
@@ -261,6 +322,7 @@ class TradeExecutor:
             "volume_min": symbol_info.get("volume_min", 0.01),
             "volume_max": symbol_info.get("volume_max", 100.0),
             "volume_step": symbol_info.get("volume_step", 0.01),
+            "point": symbol_info.get("point", 0.01),
         }
 
         # Build MT5 calc_profit callback for exact account-currency math
@@ -289,6 +351,14 @@ class TradeExecutor:
         # 4. SL / TP
         sl_price = self._risk.calculate_sl(side, current_price, atr, conviction)
         tp_price = self._risk.calculate_tp(side, current_price, atr, conviction)
+
+        # 4a. Enforce broker minimum SL distance
+        if self._broker_constraints is not None:
+            sl_price = self._broker_constraints.enforce_min_sl(
+                side=side,
+                entry_price=current_price,
+                sl_price=sl_price,
+            )
 
         # 4b. Pre-flight: verify margin with MT5 order_check
         preflight = self._bridge.order_check(
@@ -328,7 +398,18 @@ class TradeExecutor:
                     lots, abs(sl_loss), abs(sl_loss) / balance * 100 if balance else 0,
                 )
 
-        # 5. Send market order
+        # 5. Safety: check for existing MT5 positions we don't know about
+        existing = self._bridge.get_open_positions(self._config.mt5_symbol)
+        if existing:
+            log.warning(
+                "Aborting new order: MT5 already has %d %s position(s). "
+                "Recovering...",
+                len(existing), self._config.mt5_symbol,
+            )
+            self.recover_from_mt5()
+            return f"RECOVERED_{side}"
+
+        # 6. Send market order
         comment = f"spartus_{side.lower()}_{conviction:.2f}"
         order_result = self._bridge.send_market_order(
             symbol=self._config.mt5_symbol,
@@ -780,10 +861,21 @@ class TradeExecutor:
     # ------------------------------------------------------------------
 
     def start_trading(self) -> None:
-        """Set state to RUNNING -- AI begins monitoring and trading."""
+        """Set state to RUNNING -- AI begins monitoring and trading.
+
+        Checks MT5 for existing positions from a previous session
+        and adopts them so the AI can continue managing (trailing SL, exit).
+        """
         prev = self._state
         self._state = TradingState.RUNNING
-        log.info("TradeExecutor: %s -> RUNNING", prev.value)
+        recovered = self.recover_from_mt5()
+        if recovered:
+            log.info(
+                "TradeExecutor: %s -> RUNNING (recovered existing position)",
+                prev.value,
+            )
+        else:
+            log.info("TradeExecutor: %s -> RUNNING", prev.value)
 
     def stop_trading(self) -> None:
         """Close all positions immediately and set state to STOPPED.

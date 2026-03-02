@@ -33,18 +33,19 @@ risk:
   daily_trade_hard_cap: 20    # Absolute max trades per day
   min_hold_bars: 3            # Minimum bars before closing (3 x M5 = 15 min)
   direction_threshold: 0.3    # |direction| must exceed this to open
+  min_conviction: 0.15        # Conviction floor (separate from direction gate)
   exit_threshold: 0.5         # exit_urgency must exceed this to close
-  allow_min_lot_override: true  # Trade at vol_min when risk budget is too small (demo/micro accounts)
+  allow_min_lot_override: false  # Disabled: min-lot must still pass hard risk cap
 
 # --- Circuit breakers -------------------------------------------------------
 circuit_breakers:
-  consecutive_loss_pause: 3           # Pause after N consecutive losses
-  consecutive_loss_pause_minutes: 30  # ... for this many minutes
-  severe_loss_pause: 5                # Hard pause after N losses
-  severe_loss_pause_minutes: 120      # ... for this many minutes
-  daily_dd_halt_pct: 0.02             # Halt new trades at 2% daily DD
-  daily_dd_close_all_pct: 0.03        # Close ALL positions at 3% daily DD
-  weekly_dd_halt_pct: 0.05            # Halt for the week at 5% weekly DD
+  consecutive_loss_pause: 5           # Pause after 5 consecutive losses
+  consecutive_loss_pause_minutes: 15  # ... for 15 minutes
+  severe_loss_pause: 8                # Hard pause after 8 consecutive losses
+  severe_loss_pause_minutes: 60       # ... for 60 minutes
+  daily_dd_halt_pct: 0.05             # Halt new trades at 5% daily DD
+  daily_dd_close_all_pct: 0.08        # Close ALL positions at 8% daily DD
+  weekly_dd_halt_pct: 0.10            # Halt for the week at 10% weekly DD
 
 # --- Weekend ----------------------------------------------------------------
 weekend:
@@ -78,9 +79,9 @@ observation:
   observation_period_days: 14
   observation_lot_cap: 0.01
 
-# --- Post-rounding risk cap ------------------------------------------------
+# --- Post-rounding risk cap (always on) ------------------------------------
 post_rounding:
-  enable_post_rounding_risk_cap: false
+  enable_post_rounding_risk_cap: true
   post_rounding_risk_cap: 1.5
   absolute_risk_cap_pct: 0.03
 
@@ -110,3 +111,11 @@ normalizer:
   normalizer_state_path: "storage/state/normalizer_state.json"
   normalizer_backup_interval_s: 3600
   normalizer_max_age_s: 3600
+
+# --- Broker constraints / spread gate -----------------------------------------
+broker_constraints:
+  spread_hard_max_points: 50        # Block entry when spread exceeds N integer points
+  spread_spike_multiplier: 2.5      # Block entry when spread > EMA * multiplier
+  min_sl_buffer_points: 5           # Safety buffer (points) above stops_level+spread for SL
+  broker_heavy_refresh_s: 600       # Full symbol_info refresh interval (seconds)
+  broker_light_refresh_s: 10        # Spread/tick refresh interval (seconds)
