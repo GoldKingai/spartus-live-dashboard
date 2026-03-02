@@ -34,6 +34,7 @@ risk:
   min_hold_bars: 3            # Minimum bars before closing (3 x M5 = 15 min)
   direction_threshold: 0.3    # |direction| must exceed this to open
   exit_threshold: 0.5         # exit_urgency must exceed this to close
+  allow_min_lot_override: true  # Trade at vol_min when risk budget is too small (demo/micro accounts)
 
 # --- Circuit breakers -------------------------------------------------------
 circuit_breakers:

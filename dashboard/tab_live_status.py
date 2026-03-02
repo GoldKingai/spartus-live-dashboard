@@ -510,7 +510,9 @@ class LiveStatusTab(QWidget):
             "MODIFY": C["cyan"],
             "SKIP": C["label"],
             "FLAT": C["label"],
+            "HOLD_FLAT": C["label"],
             "BELOW_THRESHOLD": C["label"],
+            "LOTS_ZERO": C["yellow"],
         }
 
         # Decisions are expected newest-first; ActionLogWidget.add_entry
@@ -527,6 +529,8 @@ class LiveStatusTab(QWidget):
             elif action_upper.startswith("WK_BLOCKED"):
                 color = C["yellow"]
             elif action_upper.startswith("CB_BLOCKED"):
+                color = "#ff8800"  # orange
+            elif action_upper.startswith("BLOCKED_"):
                 color = "#ff8800"  # orange
             else:
                 color = C["text"]

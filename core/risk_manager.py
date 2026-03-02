@@ -176,7 +176,19 @@ class LiveRiskManager:
 
         raw_lots = max(raw_lots, 0.0)
         if raw_lots < vol_min * 0.5:
-            return 0.0  # Too far below minimum -- risk budget exhausted
+            if self.cfg.allow_min_lot_override and raw_lots > 0:
+                # Small account: risk budget can't afford vol_min, but we
+                # still trade at vol_min.  The actual risk will exceed
+                # max_risk_pct -- acceptable for demo / micro accounts.
+                actual_risk_pct = (vol_min * sl_distance * value_per_point) / balance * 100
+                logger.warning(
+                    "Min-lot override: raw=%.6f < min=%.4f.  "
+                    "Forcing vol_min -- actual risk=%.1f%% of balance",
+                    raw_lots, vol_min, actual_risk_pct,
+                )
+                raw_lots = vol_min
+            else:
+                return 0.0  # Too far below minimum -- risk budget exhausted
 
         raw_lots = max(raw_lots, vol_min)  # Round up to min lot
         raw_lots = min(raw_lots, vol_max)

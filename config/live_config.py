@@ -108,6 +108,7 @@ class LiveConfig:
     min_hold_bars: int = 3
     direction_threshold: float = 0.3
     exit_threshold: float = 0.5
+    allow_min_lot_override: bool = True  # Allow trading at vol_min when risk budget < vol_min (small accounts)
 
     # ---- Circuit breakers ------------------------------------------------
     consecutive_loss_pause: int = 3

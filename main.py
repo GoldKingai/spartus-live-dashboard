@@ -819,7 +819,7 @@ class SpartusOrchestrator:
             ),
         })
 
-        # --- Log action to file ---
+        # --- Log action to file (comprehensive) ---
         if self._config.log_every_action and self._live_logger:
             self._live_logger.log_action({
                 "bar_time": bar_data["time"].isoformat(),
@@ -838,7 +838,19 @@ class SpartusOrchestrator:
                 "balance": balance,
                 "equity": equity,
                 "price": current_price,
+                "atr": atr,
             })
+
+        # --- Structured per-bar log for full observability ---
+        log.info(
+            "BAR #%d | price=%.2f atr=%.4f | "
+            "dir=%+.3f conv=%.3f exit=%.3f sl=%.3f | "
+            "decision=%s | bal=%.2f eq=%.2f",
+            self._step_count, current_price, atr,
+            action["direction"], action["conviction"],
+            action["exit_urgency"], action["sl_adjustment"],
+            decision, balance, equity,
+        )
 
         # --- Log observation periodically ---
         if self._live_logger:
@@ -894,7 +906,22 @@ class SpartusOrchestrator:
                         "WARN",
                         f"Circuit breaker blocking trades: {block_reason}",
                     )
-        elif decision in ("HOLD", "FLAT", "BELOW_THRESHOLD"):
+        elif decision == "LOTS_ZERO":
+            self._add_alert(
+                "WARN",
+                f"Lot size too small for balance "
+                f"(dir={action['direction']:+.2f} conv={action['conviction']:.2f} "
+                f"ATR={atr:.2f} bal={balance:.0f})",
+            )
+            self._last_block_reason = ""
+        elif decision.startswith("BLOCKED_"):
+            self._add_alert(
+                "WARN",
+                f"Risk gate blocked: {decision[8:]} "
+                f"(dir={action['direction']:+.2f} conv={action['conviction']:.2f})",
+            )
+            self._last_block_reason = ""
+        elif decision in ("HOLD", "FLAT", "HOLD_FLAT", "BELOW_THRESHOLD"):
             # Normal non-trade decisions -- clear block tracking
             self._last_block_reason = ""
 
