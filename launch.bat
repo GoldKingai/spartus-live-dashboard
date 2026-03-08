@@ -3,9 +3,10 @@
 :: Spartus Live Trading Dashboard -- Windows Launcher
 :: ============================================================
 :: Usage:
-::   launch.bat              Normal launch
-::   launch.bat --paper      Force paper trading mode
-::   launch.bat --config X   Use custom config file
+::   launch.bat                Normal launch
+::   launch.bat --paper        Force paper trading mode
+::   launch.bat --config X     Use custom config file
+::   launch.bat --skip-update  Skip automatic update check
 :: ============================================================
 
 title Spartus Live Trading Dashboard

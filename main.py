@@ -94,7 +94,10 @@ from dashboard.tab_trade_journal import TradeJournalTab
 from dashboard.tab_model_state import ModelStateTab
 from dashboard.tab_alerts import AlertsTab
 from dashboard.tab_analytics import AnalyticsTab
+from dashboard.tab_updates import UpdatesTab
 from dashboard import currency
+from dashboard.update_dialog import UpdateDialog, UpdateNotificationBar
+from core.auto_updater import AutoUpdater, get_local_version
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -171,6 +174,11 @@ class SpartusOrchestrator:
         self._tab_model_state: Optional[ModelStateTab] = None
         self._tab_alerts: Optional[AlertsTab] = None
         self._tab_analytics: Optional[AnalyticsTab] = None
+
+        # ---- Auto-update ----
+        self._updater: Optional[AutoUpdater] = None
+        self._update_bar: Optional[UpdateNotificationBar] = None
+        self._update_dialog: Optional[UpdateDialog] = None
 
         # ---- Timers ----
         self._trading_timer: Optional[QTimer] = None
@@ -508,6 +516,10 @@ class SpartusOrchestrator:
         # Show window
         self._dashboard.show()
 
+        # Check for updates (non-blocking, runs in background thread)
+        if not self._args.skip_update:
+            self._check_for_updates()
+
         # Start trading loop timer (5-second interval to detect new M5 bars)
         self._trading_timer = QTimer()
         self._trading_timer.timeout.connect(self._trading_loop)
@@ -564,6 +576,14 @@ class SpartusOrchestrator:
         self._tab_analytics = AnalyticsTab()
         container_6.layout().addWidget(self._tab_analytics)
 
+        # Tab 7: Updates
+        container_7 = self._dashboard.get_tab("UPDATES")
+        self._tab_updates = UpdatesTab()
+        container_7.layout().addWidget(self._tab_updates)
+        # Set initial version
+        version = get_local_version(BASE_DIR)
+        self._tab_updates.set_current_version(version)
+
     def _wire_signals(self) -> None:
         """Connect button signals from dashboard and Tab 5 to executor methods."""
         # Dashboard header buttons -- safely disconnect any default handlers
@@ -598,6 +618,160 @@ class SpartusOrchestrator:
         self._tab_alerts.emergency_stop_requested.connect(self._on_emergency_stop)
         self._tab_alerts.reset_cb_requested.connect(self._on_reset_circuit_breaker)
         self._tab_alerts.reset_normalizer_requested.connect(self._on_reset_normalizer)
+
+        # Tab 7 (UpdatesTab) signals
+        self._tab_updates.check_requested.connect(self._on_tab_check_updates)
+        self._tab_updates.update_requested.connect(self._apply_update)
+        self._tab_updates.restart_requested.connect(self._restart_dashboard)
+
+    # ==================================================================
+    # Auto-Update
+    # ==================================================================
+
+    def _ensure_updater(self) -> None:
+        """Create the AutoUpdater instance if it doesn't exist yet."""
+        if self._updater is not None:
+            return
+        self._updater = AutoUpdater(
+            repo_owner="GoldKingai",
+            repo_name="spartus-live-dashboard",
+            dashboard_root=BASE_DIR,
+            on_update_available=self._on_update_available,
+            on_update_progress=self._on_update_progress,
+            on_update_complete=self._on_update_complete,
+            on_no_update=self._on_no_update,
+            on_check_failed=self._on_check_failed,
+        )
+
+    def _check_for_updates(self) -> None:
+        """Initialize the auto-updater and check for new versions."""
+        self._ensure_updater()
+        log.info(
+            "Checking for updates (current: v%s)...",
+            self._updater.current_version,
+        )
+        self._updater.check_for_updates(blocking=False)
+
+    def _on_tab_check_updates(self) -> None:
+        """User clicked Check for Updates in the Updates tab."""
+        self._ensure_updater()
+        log.info("Manual update check requested")
+        self._updater.check_for_updates(blocking=False)
+
+    def _on_no_update(self) -> None:
+        """Called from background thread when already on the latest version."""
+        from PyQt6.QtCore import QTimer as _QT
+        _QT.singleShot(0, self._no_update_ui)
+
+    def _no_update_ui(self) -> None:
+        """Update the Updates tab to show 'no update available'."""
+        if hasattr(self, "_tab_updates") and self._tab_updates:
+            self._tab_updates.set_no_update()
+
+    def _on_check_failed(self) -> None:
+        """Called from background thread when the update check fails."""
+        from PyQt6.QtCore import QTimer as _QT
+        _QT.singleShot(0, self._check_failed_ui)
+
+    def _check_failed_ui(self) -> None:
+        """Update the Updates tab to show 'check failed'."""
+        if hasattr(self, "_tab_updates") and self._tab_updates:
+            self._tab_updates.set_check_failed()
+
+    def _on_update_available(self, update_info) -> None:
+        """Called from background thread when a newer version is found."""
+        # Schedule UI work on the main thread via QTimer.singleShot
+        from PyQt6.QtCore import QTimer as _QT
+        _QT.singleShot(0, lambda: self._show_update_notification(update_info))
+
+    def _show_update_notification(self, update_info) -> None:
+        """Show update notification bar and populate Updates tab."""
+        log.info(
+            "Update available: v%s -> v%s",
+            update_info.current_version,
+            update_info.latest_version,
+        )
+        self._add_alert(
+            "INFO",
+            f"Update available: v{update_info.latest_version}",
+        )
+
+        # Push to Updates tab
+        if hasattr(self, "_tab_updates") and self._tab_updates:
+            self._tab_updates.set_update_available(update_info)
+
+        # Add notification bar to the dashboard
+        if self._dashboard:
+            central = self._dashboard.centralWidget()
+            if central and central.layout():
+                self._update_bar = UpdateNotificationBar(
+                    update_info.latest_version, self._dashboard
+                )
+                self._update_bar.clicked.connect(
+                    lambda: self._show_update_dialog(update_info)
+                )
+                # Insert at top (position 0, before header)
+                central.layout().insertWidget(0, self._update_bar)
+
+    def _show_update_dialog(self, update_info) -> None:
+        """Show the full update dialog."""
+        dialog = UpdateDialog(update_info, parent=self._dashboard)
+        dialog.update_requested.connect(self._apply_update)
+        dialog.restart_requested.connect(self._restart_dashboard)
+        self._update_dialog = dialog
+        dialog.exec()
+
+    def _apply_update(self) -> None:
+        """User confirmed update — run in background thread."""
+        import threading
+        t = threading.Thread(target=self._updater.apply_update, daemon=True)
+        t.start()
+
+    def _on_update_progress(self, message: str) -> None:
+        """Progress callback from updater (may be called from background thread)."""
+        from PyQt6.QtCore import QTimer as _QT
+        _QT.singleShot(0, lambda: self._update_progress_ui(message))
+
+    def _update_progress_ui(self, message: str) -> None:
+        """Update progress in the dialog and Updates tab (main thread)."""
+        if hasattr(self, "_update_dialog") and self._update_dialog:
+            self._update_dialog.set_progress(message)
+        if hasattr(self, "_tab_updates") and self._tab_updates:
+            self._tab_updates.set_progress(message)
+
+    def _on_update_complete(self, success: bool, message: str) -> None:
+        """Completion callback from updater (may be called from background thread)."""
+        from PyQt6.QtCore import QTimer as _QT
+        _QT.singleShot(0, lambda: self._update_complete_ui(success, message))
+
+    def _update_complete_ui(self, success: bool, message: str) -> None:
+        """Show update result in the dialog and Updates tab (main thread)."""
+        if hasattr(self, "_update_dialog") and self._update_dialog:
+            self._update_dialog.set_complete(success, message)
+        if hasattr(self, "_tab_updates") and self._tab_updates:
+            self._tab_updates.set_complete(success, message)
+
+        if success:
+            log.info("Update applied: %s", message)
+            self._add_alert("INFO", f"Update applied: {message}")
+            # Remove notification bar
+            if self._update_bar:
+                self._update_bar.setVisible(False)
+        else:
+            log.warning("Update failed: %s", message)
+            self._add_alert("WARN", f"Update failed: {message}")
+
+    def _restart_dashboard(self) -> None:
+        """Restart the dashboard process after a successful update."""
+        import subprocess
+        log.info("Restarting dashboard...")
+        # Launch a new process and exit this one
+        subprocess.Popen(
+            [sys.executable, str(BASE_DIR / "main.py")] + sys.argv[1:],
+            cwd=str(BASE_DIR),
+        )
+        if self._app:
+            self._app.quit()
 
     # ==================================================================
     # Button Callbacks
@@ -1302,6 +1476,8 @@ class SpartusOrchestrator:
             self._tab_alerts.update_data(self._prepare_alerts_data())
         elif active_idx == 5:
             self._tab_analytics.update_data(self._prepare_analytics_data())
+        elif active_idx == 6:
+            self._tab_updates.update_data(self._prepare_updates_data())
 
     # ==================================================================
     # Data Preparation for Dashboard Tabs
@@ -1996,6 +2172,15 @@ class SpartusOrchestrator:
             "weekly_reports": weekly_reports,
         }
 
+    def _prepare_updates_data(self) -> Dict[str, Any]:
+        """Prepare data dict for Tab 7: Updates.
+
+        Only passes the current version -- all other state is pushed
+        via signal-driven callbacks (set_update_available, set_progress, etc.).
+        """
+        version = get_local_version(BASE_DIR)
+        return {"current_version": version}
+
     # ==================================================================
     # Clean Shutdown
     # ==================================================================
@@ -2069,6 +2254,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Force paper trading mode (overrides config)",
+    )
+    parser.add_argument(
+        "--skip-update",
+        action="store_true",
+        default=False,
+        help="Skip automatic update check on startup",
     )
     return parser.parse_args()
 
