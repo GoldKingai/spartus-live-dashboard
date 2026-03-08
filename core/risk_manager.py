@@ -10,7 +10,7 @@ so account-currency conversion is handled automatically.
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple
 
 import numpy as np
@@ -87,6 +87,12 @@ class LiveRiskManager:
         # Hard daily trade cap -- absolute limit, no exceptions
         if daily_trade_count >= self.cfg.daily_trade_hard_cap:
             return False, "daily_hard_cap"
+
+        # Soft daily cap -- require elevated conviction after soft_cap trades
+        soft_cap = getattr(self.cfg, "daily_trade_soft_cap", 10)
+        elevated_thresh = getattr(self.cfg, "elevated_conviction_threshold", 0.6)
+        if daily_trade_count >= soft_cap and conviction < elevated_thresh:
+            return False, "daily_soft_cap"
 
         # Circuit-breaker pause
         if self._pause_until is not None:
@@ -172,8 +178,9 @@ class LiveRiskManager:
         # Risk budget
         risk_amount = balance * self.cfg.max_risk_pct * conviction * dd_mult
 
-        # SL distance in price points
-        sl_atr_mult = max(2.5 - conviction, 1.0)  # min_sl_atr = 1.0
+        # SL distance in price points (matches training: max(2.5 - conv, min_sl_atr))
+        min_sl = getattr(self.cfg, "min_sl_atr", 1.0)
+        sl_atr_mult = max(2.5 - conviction, min_sl)
         sl_distance = sl_atr_mult * atr
 
         # --- Compute value_per_point using MT5 API when available ---
@@ -208,16 +215,17 @@ class LiveRiskManager:
 
         if not use_mt5:
             # Fallback: manual tick_value / tick_size formula
-            tick_value = symbol_info.get("trade_tick_value", 1.0)
-            tick_size = symbol_info.get("trade_tick_size", 0.01)
+            tick_value = symbol_info.get("trade_tick_value", 0.745)
+            tick_size = symbol_info.get("trade_tick_size", 0.01) or 0.01
             value_per_point = tick_value / tick_size
-            raw_lots = risk_amount / (sl_distance * value_per_point)
+            denom = sl_distance * value_per_point
+            raw_lots = risk_amount / denom if denom > 0 else 0.0
 
         # Clamp to broker limits
         vol_min = symbol_info.get("volume_min", 0.01)
         vol_max = symbol_info.get("volume_max", 100.0)
-        vol_step = symbol_info.get("volume_step", 0.01)
-        point = symbol_info.get("point", 0.01)
+        vol_step = max(symbol_info.get("volume_step", 0.01), 0.001)
+        point = symbol_info.get("point", 0.01) or 0.01
 
         # Compute SL price for risk-cap checks
         if side.upper() == "BUY":
@@ -350,7 +358,8 @@ class LiveRiskManager:
         SL distance = max(2.5 - conviction, 1.0) * atr.
         Higher conviction -> tighter SL (agent is more confident).
         """
-        sl_atr_mult = max(2.5 - conviction, 1.0)
+        min_sl = getattr(self.cfg, "min_sl_atr", 1.0)
+        sl_atr_mult = max(2.5 - conviction, min_sl)
         sl_distance = sl_atr_mult * atr
 
         if side == "LONG":
@@ -379,6 +388,99 @@ class LiveRiskManager:
             return entry_price - tp_distance
 
     # ------------------------------------------------------------------
+    # Profit protection (rule-based staged SL)
+    # ------------------------------------------------------------------
+
+    def apply_profit_protection(
+        self,
+        position: dict,
+        current_price: float,
+        atr: float,
+        spread_points: float = 0.0,
+    ) -> tuple:
+        """Apply rule-based staged SL protection. Called BEFORE adjust_stop_loss.
+
+        Mirrors training RiskManager.apply_profit_protection() exactly.
+
+        Stages:
+            0 -- Initial (no protection yet)
+            1 -- Breakeven (+1.0R): SL = entry + buffer
+            2 -- Profit Lock (+1.5R): SL = entry + 0.5R
+            3 -- ATR Trail (+2.0R): SL = price - 1.0*ATR (tighten only)
+
+        Returns:
+            (new_sl, new_stage)
+        """
+        side = position["side"]
+        entry = position["entry_price"]
+        initial_sl = position.get("initial_sl", position["stop_loss"])
+        current_sl = position["stop_loss"]
+        mfe = position.get("max_favorable", 0.0)
+        stage = position.get("protection_stage", 0)
+
+        # R = initial risk distance
+        r_distance = abs(entry - initial_sl)
+        if r_distance <= 0:
+            return current_sl, stage
+
+        # Current R multiple
+        r_multiple = mfe / r_distance
+
+        # Buffer for breakeven (matches training: max(spread, buffer_pips * point))
+        point = getattr(self.cfg, "point", 0.01)
+        be_buffer_pips = getattr(self.cfg, "protection_be_buffer_pips", 0.5)
+        be_buffer = max(spread_points, be_buffer_pips * point)
+
+        # Protection trigger thresholds (from config or defaults)
+        be_trigger = getattr(self.cfg, "protection_be_trigger_r", 1.0)
+        lock_trigger = getattr(self.cfg, "protection_lock_trigger_r", 1.5)
+        lock_amount = getattr(self.cfg, "protection_lock_amount_r", 0.5)
+        trail_trigger = getattr(self.cfg, "protection_trail_trigger_r", 2.0)
+        trail_atr = getattr(self.cfg, "protection_trail_atr_mult", 1.0)
+
+        # Determine highest eligible stage
+        if r_multiple >= trail_trigger:
+            target_stage = 3
+        elif r_multiple >= lock_trigger:
+            target_stage = 2
+        elif r_multiple >= be_trigger:
+            target_stage = 1
+        else:
+            target_stage = 0
+
+        new_stage = max(stage, target_stage)
+
+        # Calculate protection floor
+        if new_stage >= 3:
+            min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
+            trail = max(trail_atr * atr, min_trail_atr * atr)
+            if side == "LONG":
+                floor_sl = current_price - trail
+            else:
+                floor_sl = current_price + trail
+        elif new_stage == 2:
+            lock_dist = lock_amount * r_distance
+            if side == "LONG":
+                floor_sl = entry + lock_dist
+            else:
+                floor_sl = entry - lock_dist
+        elif new_stage == 1:
+            if side == "LONG":
+                floor_sl = entry + be_buffer
+            else:
+                floor_sl = entry - be_buffer
+        else:
+            return current_sl, new_stage
+
+        # Only tighten
+        if side == "LONG":
+            new_sl = max(floor_sl, current_sl)
+        else:
+            new_sl = min(floor_sl, current_sl)
+
+        return new_sl, new_stage
+
+    # ------------------------------------------------------------------
     # Trailing SL (match training exactly)
     # ------------------------------------------------------------------
 
@@ -403,8 +505,8 @@ class LiveRiskManager:
         Returns:
             New stop-loss price (only tighter or same as current).
         """
-        # Minimum trail distance: 0.5 * atr
-        min_distance = 0.5 * atr
+        # Minimum trail distance (matches training: min_sl_trail_atr * atr)
+        min_distance = getattr(self.cfg, "min_sl_trail_atr", 0.5) * atr
 
         # Target SL based on agent's adjustment
         trail_distance = min_distance + (1.0 - sl_adjustment) * 2.0 * atr
@@ -446,18 +548,14 @@ class LiveRiskManager:
             now = datetime.now(timezone.utc)
             if self._consecutive_losses >= self.cfg.severe_loss_pause:
                 pause_minutes = self.cfg.severe_loss_pause_minutes
-                self._pause_until = now.replace(
-                    minute=now.minute,
-                ) + __import__("datetime").timedelta(minutes=pause_minutes)
+                self._pause_until = now + timedelta(minutes=pause_minutes)
                 logger.warning(
                     "CIRCUIT BREAKER: %d consecutive losses -> %d min pause",
                     self._consecutive_losses, pause_minutes,
                 )
             elif self._consecutive_losses >= self.cfg.consecutive_loss_pause:
                 pause_minutes = self.cfg.consecutive_loss_pause_minutes
-                self._pause_until = now.replace(
-                    minute=now.minute,
-                ) + __import__("datetime").timedelta(minutes=pause_minutes)
+                self._pause_until = now + timedelta(minutes=pause_minutes)
                 logger.warning(
                     "CIRCUIT BREAKER: %d consecutive losses -> %d min pause",
                     self._consecutive_losses, pause_minutes,

@@ -94,6 +94,7 @@ class AlertsTab(QWidget):
     stop_requested = pyqtSignal()
     emergency_stop_requested = pyqtSignal()
     reset_cb_requested = pyqtSignal()
+    reset_normalizer_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -247,6 +248,16 @@ class AlertsTab(QWidget):
         self._btn_reset_cb.setEnabled(False)
         self._btn_reset_cb.clicked.connect(self.reset_cb_requested.emit)
         layout.addWidget(self._btn_reset_cb)
+
+        # Reset Normalizer (conviction collapse recovery)
+        self._btn_reset_norm = QPushButton("Reset Normalizer")
+        self._btn_reset_norm.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_reset_norm.setToolTip(
+            "Clear z-score buffers and re-warm from history.\n"
+            "Use after violent market moves cause conviction collapse."
+        )
+        self._btn_reset_norm.clicked.connect(self.reset_normalizer_requested.emit)
+        layout.addWidget(self._btn_reset_norm)
 
         # Apply initial styles based on STOPPED state
         self._update_button_states("STOPPED")
@@ -471,10 +482,15 @@ class AlertsTab(QWidget):
             message = alert.get("message", "")
             color = ALERT_COLORS.get(level, C["text"])
 
+            # Escape HTML special chars to prevent display issues
+            import html as _html
+            ts_safe = _html.escape(str(ts))
+            msg_safe = _html.escape(str(message))
+
             html_lines.append(
-                f'<span style="color:{C["subtext"]}">{ts}</span> '
+                f'<span style="color:{C["subtext"]}">{ts_safe}</span> '
                 f'<span style="color:{color}">[{level}]</span> '
-                f'<span style="color:{C["text"]}">{message}</span>'
+                f'<span style="color:{C["text"]}">{msg_safe}</span>'
             )
 
         self._alert_log.setHtml("<br>".join(html_lines))
@@ -582,6 +598,18 @@ class AlertsTab(QWidget):
             f"padding-top: 9px; padding-bottom: 7px; }}"
         )
 
+    @staticmethod
+    def _t5_reset_norm_interactive() -> str:
+        """Stylesheet for the Reset Normalizer button when enabled."""
+        return (
+            f"QPushButton {{ background-color: {C['surface2']}; color: {C['yellow']}; "
+            f"border: 2px solid {C['yellow']}; border-radius: 4px; "
+            f"padding: 8px 16px; font-size: 12px; font-weight: bold; }} "
+            f"QPushButton:hover {{ background-color: {C['border']}; }} "
+            f"QPushButton:pressed {{ background-color: {C['surface']}; "
+            f"padding-top: 9px; padding-bottom: 7px; }}"
+        )
+
     # -------------------------------------------------------------------------
 
     def _update_button_states(self, state: str) -> None:
@@ -607,6 +635,7 @@ class AlertsTab(QWidget):
         disabled = self._t5_btn_disabled()
         reset_style = self._t5_reset_interactive()
         reset_disabled = self._t5_btn_disabled()
+        reset_norm_style = self._t5_reset_norm_interactive()
 
         if state == "STOPPED":
             self._btn_start.setText("\u25b6  Start Trading")
@@ -623,6 +652,9 @@ class AlertsTab(QWidget):
 
             self._btn_reset_cb.setEnabled(False)
             self._btn_reset_cb.setStyleSheet(reset_disabled)
+
+            self._btn_reset_norm.setEnabled(True)
+            self._btn_reset_norm.setStyleSheet(reset_norm_style)
 
         elif state == "RUNNING":
             self._btn_start.setText("\u25cf  Running")
@@ -642,6 +674,9 @@ class AlertsTab(QWidget):
             self._btn_reset_cb.setEnabled(False)
             self._btn_reset_cb.setStyleSheet(reset_disabled)
 
+            self._btn_reset_norm.setEnabled(True)
+            self._btn_reset_norm.setStyleSheet(reset_norm_style)
+
         elif state == "WINDING DOWN":
             self._btn_start.setText("\u25b6  Start Trading")
             self._btn_start.setEnabled(False)
@@ -659,6 +694,9 @@ class AlertsTab(QWidget):
 
             self._btn_reset_cb.setEnabled(False)
             self._btn_reset_cb.setStyleSheet(reset_disabled)
+
+            self._btn_reset_norm.setEnabled(True)
+            self._btn_reset_norm.setStyleSheet(reset_norm_style)
 
         elif state == "CB PAUSED":
             self._btn_start.setText("\u25cf  CB Paused")
@@ -678,6 +716,9 @@ class AlertsTab(QWidget):
             self._btn_reset_cb.setEnabled(True)
             self._btn_reset_cb.setStyleSheet(reset_style)
 
+            self._btn_reset_norm.setEnabled(True)
+            self._btn_reset_norm.setStyleSheet(reset_norm_style)
+
         else:
             # Unknown state -- disable all except emergency
             self._btn_start.setText("\u25b6  Start Trading")
@@ -694,6 +735,9 @@ class AlertsTab(QWidget):
 
             self._btn_reset_cb.setEnabled(False)
             self._btn_reset_cb.setStyleSheet(reset_disabled)
+
+            self._btn_reset_norm.setEnabled(True)
+            self._btn_reset_norm.setStyleSheet(reset_norm_style)
 
         # Emergency Stop is ALWAYS enabled, regardless of state
         self._btn_emergency.setEnabled(True)

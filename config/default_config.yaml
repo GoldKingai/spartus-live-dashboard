@@ -30,22 +30,45 @@ risk:
   max_risk_pct: 0.02          # Max 2% of equity per trade
   max_dd: 0.10                # 10% total drawdown limit
   max_daily_dd: 0.03          # 3% daily drawdown limit
-  daily_trade_hard_cap: 20    # Absolute max trades per day
-  min_hold_bars: 3            # Minimum bars before closing (3 x M5 = 15 min)
+  daily_trade_soft_cap: 10    # After this many trades, conviction must exceed 0.6
+  daily_trade_hard_cap: 50    # Absolute max trades per day (demo, use 20 for live)
+  min_hold_bars: 6            # Minimum bars before closing (6 x M5 = 30 min)
+  min_sl_atr: 1.0             # Minimum SL distance: 1.0 ATR
+  min_sl_trail_atr: 0.5       # Minimum trailing SL distance: 0.5 ATR
   direction_threshold: 0.3    # |direction| must exceed this to open
-  min_conviction: 0.15        # Conviction floor (separate from direction gate)
+  min_conviction: 0.30        # Conviction floor (raised from 0.15 based on Week 1 data)
+  elevated_conviction_threshold: 0.6  # Required after daily_trade_soft_cap reached
   exit_threshold: 0.5         # exit_urgency must exceed this to close
   allow_min_lot_override: false  # Disabled: min-lot must still pass hard risk cap
 
+# --- Profit Protection (rule-based staged SL) --------------------------------
+# Stage 1: Move SL to breakeven when trade reaches +1.0R
+# Stage 2: Lock +0.5R profit when trade reaches +1.5R
+# Stage 3: Activate ATR trailing stop when trade reaches +2.0R
+# R = abs(entry_price - initial_stop_loss)
+profit_protection:
+  protection_be_trigger_r: 1.0
+  protection_be_buffer_pips: 0.5
+  protection_lock_trigger_r: 1.5
+  protection_lock_amount_r: 0.5
+  protection_trail_trigger_r: 2.0
+  protection_trail_atr_mult: 1.0
+
 # --- Circuit breakers -------------------------------------------------------
+# NOTE: These are DEMO-MODE values (relaxed).
+# For live trading, tighten back to:
+#   consecutive_loss_pause: 5, pause_minutes: 15
+#   severe_loss_pause: 8, severe_pause_minutes: 60
+#   daily_dd_halt_pct: 0.05, daily_dd_close_all_pct: 0.08
+#   weekly_dd_halt_pct: 0.10
 circuit_breakers:
-  consecutive_loss_pause: 5           # Pause after 5 consecutive losses
-  consecutive_loss_pause_minutes: 15  # ... for 15 minutes
-  severe_loss_pause: 8                # Hard pause after 8 consecutive losses
-  severe_loss_pause_minutes: 60       # ... for 60 minutes
-  daily_dd_halt_pct: 0.05             # Halt new trades at 5% daily DD
-  daily_dd_close_all_pct: 0.08        # Close ALL positions at 8% daily DD
-  weekly_dd_halt_pct: 0.10            # Halt for the week at 10% weekly DD
+  consecutive_loss_pause: 10          # Pause after 10 consecutive losses (demo)
+  consecutive_loss_pause_minutes: 5   # ... for 5 minutes (demo)
+  severe_loss_pause: 15               # Hard pause after 15 consecutive losses (demo)
+  severe_loss_pause_minutes: 15       # ... for 15 minutes (demo)
+  daily_dd_halt_pct: 0.20             # Halt new trades at 20% daily DD (demo)
+  daily_dd_close_all_pct: 0.30        # Close ALL positions at 30% daily DD (demo)
+  weekly_dd_halt_pct: 0.40            # Halt for the week at 40% weekly DD (demo)
 
 # --- Weekend ----------------------------------------------------------------
 weekend:
@@ -60,6 +83,20 @@ features:
   norm_window: 200
   norm_clip: 5.0
   frame_stack: 10
+
+# --- Normalization mode -----------------------------------------------------
+# "adaptive" = rolling 200-bar z-score (updates live -- vulnerable to crashes)
+# "frozen"   = use training baseline mean/std (deterministic, immune to crashes)
+# STRONGLY RECOMMENDED: "frozen" for real capital.
+# The model was trained under a fixed distribution -- adaptive can distort it.
+normalization_mode: "frozen"
+
+# --- Auto-reset detector (for adaptive mode only) ---------------------------
+# Triggers automatic normalizer reset if z-score distribution deviates too far.
+auto_reset:
+  auto_reset_z_abs_mean_threshold: 3.5    # mean(|z|) > 3.5 triggers reset
+  auto_reset_pct_features_over_4sigma: 0.20  # >20% features above 4σ triggers reset
+  auto_reset_cooldown_bars: 50            # Min bars between auto-resets
 
 # --- Calendar ---------------------------------------------------------------
 calendar:

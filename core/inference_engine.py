@@ -134,11 +134,18 @@ class InferenceEngine:
 
         # Validate dimension against the model's actual obs space
         if self._obs_dim > 0 and obs.shape[0] != self._obs_dim:
-            log.warning(
-                "Observation dimension mismatch: got %d, model expects %d",
+            log.error(
+                "Observation dimension mismatch: got %d, model expects %d. "
+                "Padding/truncating to avoid crash.",
                 obs.shape[0],
                 self._obs_dim,
             )
+            # Pad or truncate to match expected dimension
+            if obs.shape[0] < self._obs_dim:
+                obs = np.pad(obs, (0, self._obs_dim - obs.shape[0]),
+                             constant_values=0.0)
+            else:
+                obs = obs[:self._obs_dim]
 
         # Sanitise NaN / Inf
         nan_mask = np.isnan(obs)

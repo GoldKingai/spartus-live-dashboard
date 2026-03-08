@@ -62,11 +62,11 @@ class MT5Bridge:
         self._resolved_symbols: Dict[str, str] = {}
 
         # Account / symbol metadata populated by _detect_account_setup
-        self.account_currency: str = "USD"
-        self.tick_value: float = 1.0
+        self.account_currency: str = "GBP"
+        self.tick_value: float = 0.745
         self.tick_size: float = 0.01
         self.contract_size: float = 100.0
-        self.value_per_point: float = 100.0  # tick_value / tick_size
+        self.value_per_point: float = 74.5   # tick_value / tick_size
 
         # Emergency callback -- set externally (e.g. by the safety module)
         self.on_emergency_stop: Optional[Callable[[], None]] = None
@@ -157,7 +157,7 @@ class MT5Bridge:
         else:
             log.warning(
                 "Cannot retrieve symbol_info for %s; using defaults "
-                "(tick_value=1.0, tick_size=0.01)",
+                "(tick_value=0.745, tick_size=0.01)",
                 primary,
             )
 
@@ -630,6 +630,153 @@ class MT5Bridge:
             results.append(res)
 
         return results
+
+    # ------------------------------------------------------------------
+    # Trade history (closed deals)
+    # ------------------------------------------------------------------
+
+    def get_deal_history(
+        self,
+        symbol: str = "XAUUSD",
+        days: int = 7,
+    ) -> List[Dict[str, Any]]:
+        """Fetch closed deal history from MT5 for reconciliation.
+
+        Returns pairs of (IN, OUT) deals grouped by position_id so that
+        missed trades can be reconstructed after a dashboard restart.
+
+        Args:
+            symbol: Canonical symbol name.
+            days:   Number of days of history to fetch.
+
+        Returns:
+            List of dicts, each representing a completed trade:
+                position_id, side, entry_price, exit_price, lots,
+                pnl (profit in account currency), open_time, close_time,
+                sl, tp, magic, comment.
+        """
+        from datetime import timedelta
+
+        broker_sym = self._broker_name(symbol)
+        date_to = datetime.now(timezone.utc)
+        date_from = date_to - timedelta(days=days)
+
+        deals = mt5.history_deals_get(date_from, date_to, group=f"*{broker_sym}*")
+        if deals is None or len(deals) == 0:
+            log.info("get_deal_history: no deals for %s in last %d days", broker_sym, days)
+            return []
+
+        log.info(
+            "get_deal_history: raw deals from MT5: %d for %s  "
+            "date_range=%s to %s",
+            len(deals), broker_sym,
+            date_from.strftime("%Y-%m-%d %H:%M"),
+            date_to.strftime("%Y-%m-%d %H:%M"),
+        )
+
+        # Group deals by position_id
+        from collections import defaultdict
+        by_position: Dict[int, List[Any]] = defaultdict(list)
+        for deal in deals:
+            if deal.position_id > 0:
+                by_position[deal.position_id].append(deal)
+
+        # Log all position_ids found (helps debug missing trades)
+        log.info(
+            "get_deal_history: %d unique position_ids: %s",
+            len(by_position),
+            sorted(by_position.keys()),
+        )
+
+        # Build completed trades (must have both IN and OUT deals)
+        completed: List[Dict[str, Any]] = []
+        for pos_id, deal_list in by_position.items():
+            entry_deal = None
+            exit_deal = None
+
+            for d in deal_list:
+                # entry: 0=IN, 1=OUT
+                if d.entry == 0:  # DEAL_ENTRY_IN
+                    entry_deal = d
+                elif d.entry == 1:  # DEAL_ENTRY_OUT
+                    exit_deal = d
+
+            if entry_deal is None or exit_deal is None:
+                # Log incomplete trades so we can debug missing ones
+                has_in = entry_deal is not None
+                has_out = exit_deal is not None
+                log.debug(
+                    "get_deal_history: position_id=%d INCOMPLETE "
+                    "(has_IN=%s, has_OUT=%s) -- %s",
+                    pos_id, has_in, has_out,
+                    "still open" if has_in and not has_out else "orphan",
+                )
+                continue
+
+            # Determine side from entry deal type (0=BUY, 1=SELL)
+            side = "LONG" if entry_deal.type == 0 else "SHORT"
+
+            completed.append({
+                "position_id": pos_id,
+                "side": side,
+                "entry_price": entry_deal.price,
+                "exit_price": exit_deal.price,
+                "lots": entry_deal.volume,
+                "pnl": exit_deal.profit + exit_deal.swap + exit_deal.fee,
+                "open_time": datetime.fromtimestamp(entry_deal.time, tz=timezone.utc),
+                "close_time": datetime.fromtimestamp(exit_deal.time, tz=timezone.utc),
+                "magic": entry_deal.magic,
+                "comment": exit_deal.comment or "",
+            })
+
+        log.info(
+            "get_deal_history: found %d completed trades for %s in last %d days "
+            "(position_ids: %s)",
+            len(completed), broker_sym, days,
+            [t["position_id"] for t in completed],
+        )
+        return completed
+
+    def get_deal_by_position(self, ticket: int) -> Optional[Dict[str, Any]]:
+        """Look up a specific closed trade by its position ticket.
+
+        Uses ``mt5.history_deals_get(position=ticket)`` which is more
+        reliable than the date-range query (MT5 API quirk: date-range
+        queries can miss recent deals).
+
+        Returns:
+            Dict with position_id, side, entry_price, exit_price, lots,
+            pnl, open_time, close_time, magic, comment.
+            None if the position is not found or still open.
+        """
+        deals = mt5.history_deals_get(position=ticket)
+        if not deals or len(deals) == 0:
+            return None
+
+        entry_deal = None
+        exit_deal = None
+        for d in deals:
+            if d.entry == 0:  # DEAL_ENTRY_IN
+                entry_deal = d
+            elif d.entry == 1:  # DEAL_ENTRY_OUT
+                exit_deal = d
+
+        if entry_deal is None or exit_deal is None:
+            return None
+
+        side = "LONG" if entry_deal.type == 0 else "SHORT"
+        return {
+            "position_id": ticket,
+            "side": side,
+            "entry_price": entry_deal.price,
+            "exit_price": exit_deal.price,
+            "lots": entry_deal.volume,
+            "pnl": exit_deal.profit + exit_deal.swap + exit_deal.fee,
+            "open_time": datetime.fromtimestamp(entry_deal.time, tz=timezone.utc),
+            "close_time": datetime.fromtimestamp(exit_deal.time, tz=timezone.utc),
+            "magic": entry_deal.magic,
+            "comment": exit_deal.comment or "",
+        }
 
     # ------------------------------------------------------------------
     # MT5 calculators (exact, account-currency-aware)

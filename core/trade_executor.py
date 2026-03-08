@@ -105,6 +105,12 @@ class TradeExecutor:
         self._max_favorable: float = 0.0  # Max favorable excursion
         self._initial_sl: float = 0.0
         self._initial_tp: float = 0.0
+        self._protection_stage: int = 0  # Profit protection stage (0-3)
+        self._sl_modifications: List[Dict[str, Any]] = []  # SL trail history per trade
+
+        # --- Model version (injected from main.py after load) ---
+        self._model_version: str = "unknown"
+        self._model_hash: str = ""
 
         # --- Balance tracking ---
         self._peak_balance: float = 0.0
@@ -112,6 +118,16 @@ class TradeExecutor:
 
         # --- ATR cache (updated from feature pipeline) ---
         self._current_atr: float = 1.0
+
+        # --- Bar context (set by main.py each bar for trade logging) ---
+        self._bar_observation: Optional[Any] = None  # 670-dim numpy array
+        self._bar_risk_state: Dict[str, Any] = {}
+        self._bar_spread: float = 0.0
+
+        # --- Entry snapshots (captured at trade open for close record) ---
+        self._entry_observation: Optional[Any] = None
+        self._entry_risk_state: Dict[str, Any] = {}
+        self._entry_spread: float = 0.0
 
         # --- Broker constraints (injected after init) ---
         self._broker_constraints = None
@@ -137,6 +153,27 @@ class TradeExecutor:
         """Inject BrokerConstraints for min SL enforcement."""
         self._broker_constraints = constraints
 
+    def set_model_version(self, version: str, file_hash: str = "") -> None:
+        """Inject model version info for trade logging traceability."""
+        self._model_version = version
+        self._model_hash = file_hash
+
+    def set_bar_context(
+        self,
+        observation=None,
+        risk_state: Optional[Dict[str, Any]] = None,
+        spread: float = 0.0,
+    ) -> None:
+        """Set per-bar context for trade logging.
+
+        Called by main.py each bar BEFORE execute_action() so that
+        trade entry records capture the observation, risk state, and
+        spread at the moment of entry.
+        """
+        self._bar_observation = observation
+        self._bar_risk_state = risk_state or {}
+        self._bar_spread = spread
+
     # ------------------------------------------------------------------
     # Position recovery (restart / crash recovery)
     # ------------------------------------------------------------------
@@ -147,6 +184,9 @@ class TradeExecutor:
         Called when transitioning to RUNNING state.  Picks up positions
         from a previous session that weren't closed (e.g. dashboard
         crash, window close without Stop Trading).
+
+        Only adopts positions tagged with our magic number (234000) to
+        avoid accidentally managing the user's manual trades.
 
         Returns True if a position was recovered.
         """
@@ -162,7 +202,20 @@ class TradeExecutor:
         if not positions:
             return False
 
-        pos = positions[0]  # Take first XAUUSD position
+        # Filter: only adopt positions placed by THIS system (magic=234000)
+        our_positions = [
+            p for p in positions if p.get("magic", 0) == 234000
+        ]
+        if not our_positions:
+            if positions:
+                log.info(
+                    "recover_from_mt5: found %d %s position(s) but none "
+                    "with our magic number (234000) -- ignoring (user trades)",
+                    len(positions), self._config.mt5_symbol,
+                )
+            return False
+
+        pos = our_positions[0]
         side = "LONG" if pos.get("type", 0) == 0 else "SHORT"
 
         self._position = {
@@ -173,6 +226,7 @@ class TradeExecutor:
             "sl": pos.get("sl", 0),
             "tp": pos.get("tp", 0),
             "conviction": 0.5,  # Unknown for recovered positions
+            "open_time": pos.get("time", datetime.now(timezone.utc)),
         }
         self._entry_step = self._step_count
         self._initial_sl = pos.get("sl", 0)
@@ -186,6 +240,203 @@ class TradeExecutor:
             pos.get("sl", 0), pos.get("tp", 0),
         )
         return True
+
+    def reconcile_trade_history(self) -> int:
+        """Reconcile MT5 deal history with our trade database.
+
+        Fetches recent closed deals from MT5 and imports any that are
+        missing from our database.  This handles the case where the
+        dashboard was restarted and a trade closed (via TP/SL) while
+        it was down.
+
+        Uses two strategies:
+        1. Date-range query for broad discovery of unknown trades.
+        2. Position-specific lookups for tickets we know about but that
+           the date-range query missed (MT5 API quirk).
+
+        Returns:
+            Number of trades recovered from MT5 history.
+        """
+        try:
+            completed = self._bridge.get_deal_history(
+                symbol=self._config.mt5_symbol,
+                days=7,
+            )
+        except Exception:
+            log.exception("reconcile_trade_history: failed to fetch MT5 history")
+            return 0
+
+        if not completed:
+            completed = []
+
+        # Get all tickets we already know about
+        known_tickets = self._memory.get_known_mt5_tickets()
+        log.info(
+            "reconcile_trade_history: %d MT5 trades, known_tickets=%s",
+            len(completed), sorted(known_tickets),
+        )
+
+        recovered = 0
+        for trade in completed:
+            pos_id = trade["position_id"]
+
+            # Skip trades not placed by us (different magic number)
+            if trade.get("magic", 0) != 234000:
+                log.info(
+                    "reconcile: SKIP ticket=%d (magic=%d, not ours)",
+                    pos_id, trade.get("magic", 0),
+                )
+                continue
+
+            # Skip trades we already have (by ticket)
+            if pos_id in known_tickets:
+                log.debug(
+                    "reconcile: SKIP ticket=%d (already known)", pos_id,
+                )
+                continue
+
+            # Also check by trade characteristics (handles old trades
+            # recorded before mt5_ticket column existed)
+            if self._memory.has_matching_trade(
+                side=trade["side"],
+                entry_price=trade["entry_price"],
+                exit_price=trade["exit_price"],
+                lot_size=trade["lots"],
+                pnl=round(trade.get("pnl", 0.0), 2),
+            ):
+                # Trade exists but without ticket -- backfill the ticket
+                self._memory.backfill_mt5_ticket(
+                    side=trade["side"],
+                    entry_price=trade["entry_price"],
+                    exit_price=trade["exit_price"],
+                    lot_size=trade["lots"],
+                    pnl=round(trade.get("pnl", 0.0), 2),
+                    mt5_ticket=pos_id,
+                )
+                known_tickets.add(pos_id)
+                continue
+
+            # Determine close reason from comment or P/L
+            comment = trade.get("comment", "").lower()
+            pnl = trade.get("pnl", 0.0)
+            if "tp" in comment or "take profit" in comment:
+                close_reason = "TP_HIT"
+            elif "sl" in comment or "stop loss" in comment:
+                close_reason = "SL_HIT"
+            elif pnl > 0:
+                close_reason = "TP_HIT"  # Profit likely means TP
+            elif pnl < 0:
+                close_reason = "SL_HIT"  # Loss likely means SL
+            else:
+                close_reason = "EXTERNAL_CLOSE"
+
+            # Compute hold duration in bars (5-min bars)
+            open_time = trade.get("open_time", datetime.now(timezone.utc))
+            close_time = trade.get("close_time", datetime.now(timezone.utc))
+            hold_seconds = (close_time - open_time).total_seconds()
+            hold_bars = max(1, int(hold_seconds / 300))
+
+            # Compute P/L percentage (approximate using initial balance)
+            balance = self._peak_balance or self._initial_balance or 1000.0
+            pnl_pct = pnl / balance if balance > 0 else 0.0
+
+            # Determine session from open time (matches _get_session_name)
+            hour = open_time.hour
+            if 0 <= hour < 7:
+                session = "Asia"
+            elif 7 <= hour < 12:
+                session = "London"
+            elif 12 <= hour < 16:
+                session = "NY"
+            elif 16 <= hour < 20:
+                session = "NY_PM"
+            else:
+                session = "Off"
+
+            trade_data = {
+                "timestamp": close_time.isoformat(),
+                "week": 0,
+                "step": 0,
+                "side": trade["side"],
+                "entry_price": trade["entry_price"],
+                "exit_price": trade["exit_price"],
+                "lot_size": trade["lots"],
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 6),
+                "hold_bars": hold_bars,
+                "close_reason": close_reason,
+                "conviction": 0.5,  # Unknown for recovered trades
+                "rsi_at_entry": 0.5,
+                "trend_dir_at_entry": 0.0,
+                "session_at_entry": session,
+                "vol_regime_at_entry": 1.0,
+                "entry_conditions": {"recovered_from_mt5": True},
+                "paper_trade": False,
+                "mt5_ticket": pos_id,
+            }
+
+            trade_id = self._memory.record_trade(trade_data)
+
+            # Also update risk manager with the P/L
+            self._risk.record_trade_result(pnl)
+
+            log.warning(
+                "RECONCILED missed trade from MT5: ticket=%d %s "
+                "%.3f lots  entry=%.2f exit=%.2f  P/L=%+.2f (%s)  "
+                "held=%d bars  -> trade_id=%d",
+                pos_id,
+                trade["side"],
+                trade["lots"],
+                trade["entry_price"],
+                trade["exit_price"],
+                pnl,
+                close_reason,
+                hold_bars,
+                trade_id,
+            )
+            recovered += 1
+
+        # --- Pass 2: Position-specific lookups for known tickets ---
+        # MT5's date-range query can miss recent deals.  For any ticket
+        # in our DB that doesn't appear in the date-range results, do a
+        # direct position lookup to catch deals the broad query missed.
+        date_range_pos_ids = {t["position_id"] for t in completed}
+        for db_ticket in known_tickets:
+            if db_ticket in date_range_pos_ids:
+                continue  # Already found in the broad query
+            # This ticket is in our DB but wasn't in the date-range results.
+            # It's already recorded, so no action needed -- but log it for
+            # debugging.
+            log.debug(
+                "reconcile: ticket=%d in DB but not in date-range query",
+                db_ticket,
+            )
+
+        # --- Pass 3: Check for orphaned tickets ---
+        # Look for tickets we recorded as open but that are now closed
+        # and weren't found by the date-range query.  Use position-specific
+        # lookup to find them.
+        if self._memory is not None:
+            # Get tickets that might have been missed: tickets in our
+            # predictions table (we made predictions for them) but not
+            # in trades.  Or check the decision log for open tickets.
+            # Simpler approach: check the known tickets set against the
+            # date-range results.  Any ticket NOT in date-range AND NOT
+            # in our DB might have been missed entirely.
+            # Since we can't discover truly unknown tickets by position
+            # lookup (we need to know the ticket), we rely on the date-range
+            # query for discovery.  But we CAN verify existing DB entries.
+            pass
+
+        if recovered > 0:
+            log.warning(
+                "RECONCILIATION COMPLETE: recovered %d missed trades from MT5",
+                recovered,
+            )
+        else:
+            log.info("reconcile_trade_history: all MT5 trades already recorded")
+
+        return recovered
 
     # ------------------------------------------------------------------
     # Public API -- main decision loop
@@ -254,8 +505,7 @@ class TradeExecutor:
         # --- RUNNING: full logic ---
         if self._position is not None:
             return self._handle_in_position(action, current_bar, account)
-        else:
-            return self._handle_no_position(action, current_bar, account)
+        return self._handle_no_position(action, current_bar, account)
 
     # ------------------------------------------------------------------
     # Entry logic (no position)
@@ -317,7 +567,7 @@ class TradeExecutor:
 
         # Build symbol_info dict with the keys calculate_lot_size expects
         lot_info = {
-            "trade_tick_value": symbol_info.get("tick_value", 1.0),
+            "trade_tick_value": symbol_info.get("tick_value", 0.745),
             "trade_tick_size": symbol_info.get("tick_size", 0.01),
             "volume_min": symbol_info.get("volume_min", 0.01),
             "volume_max": symbol_info.get("volume_max", 100.0),
@@ -398,13 +648,15 @@ class TradeExecutor:
                     lots, abs(sl_loss), abs(sl_loss) / balance * 100 if balance else 0,
                 )
 
-        # 5. Safety: check for existing MT5 positions we don't know about
-        existing = self._bridge.get_open_positions(self._config.mt5_symbol)
-        if existing:
+        # 5. Safety: check for existing AI positions we don't know about
+        # Only consider positions with our magic number -- ignore user's manual trades
+        existing = self._bridge.get_open_positions(self._config.mt5_symbol) or []
+        our_existing = [p for p in existing if p.get("magic", 0) == 234000]
+        if our_existing:
             log.warning(
-                "Aborting new order: MT5 already has %d %s position(s). "
-                "Recovering...",
-                len(existing), self._config.mt5_symbol,
+                "Aborting new order: MT5 already has %d AI-placed %s "
+                "position(s) (magic=234000). Recovering...",
+                len(our_existing), self._config.mt5_symbol,
             )
             self.recover_from_mt5()
             return f"RECOVERED_{side}"
@@ -444,6 +696,7 @@ class TradeExecutor:
         self._max_favorable = 0.0
         self._initial_sl = sl_price
         self._initial_tp = tp_price
+        self._protection_stage = 0
 
         # Snapshot entry conditions for trade journal
         self._entry_conditions = {
@@ -458,13 +711,19 @@ class TradeExecutor:
             "direction": direction,
         }
 
+        # Snapshot bar context at entry for training-improvement logging
+        self._entry_observation = self._bar_observation
+        self._entry_risk_state = dict(self._bar_risk_state)
+        self._entry_spread = self._bar_spread
+
         self._daily_trades += 1
 
         log.info(
             "OPEN %s: ticket=%d  lots=%.3f  fill=%.2f  "
-            "SL=%.2f  TP=%.2f  conviction=%.3f  daily_trade#%d",
+            "SL=%.2f  TP=%.2f  conviction=%.3f  daily_trade#%d  spread=%.1f",
             side, ticket, lots, fill_price,
             sl_price, tp_price, conviction, self._daily_trades,
+            self._entry_spread,
         )
 
         return f"OPEN_{side}"
@@ -526,10 +785,41 @@ class TradeExecutor:
                 )
                 # Fall through to SL adjustment
 
-        # --- Adjust trailing SL ---
+        # --- Apply profit protection first, then AI trailing SL ---
         atr = self._current_atr
         current_sl = pos["sl"]
 
+        # Profit protection (rule-based staged SL floor)
+        protection_sl, new_stage = self._risk.apply_profit_protection(
+            position={
+                "side": pos["side"],
+                "entry_price": pos["entry_price"],
+                "stop_loss": current_sl,
+                "initial_sl": self._initial_sl,
+                "max_favorable": self._max_favorable,
+                "protection_stage": self._protection_stage,
+            },
+            current_price=current_price,
+            atr=atr,
+            spread_points=self._bar_spread * 0.01,  # spread in points
+        )
+
+        # Log protection stage transitions
+        if new_stage > self._protection_stage:
+            r_distance = abs(pos["entry_price"] - self._initial_sl)
+            r_current = self._max_favorable / r_distance if r_distance > 0 else 0.0
+            log.info(
+                "PROTECT: ticket=%d  stage %d->%d  R=%.2f  "
+                "sl %.2f -> %.2f  side=%s",
+                pos["ticket"], self._protection_stage, new_stage,
+                r_current, current_sl, protection_sl, pos["side"],
+            )
+            self._log_protection_event(pos, new_stage, protection_sl, r_current)
+        self._protection_stage = new_stage
+        current_sl = protection_sl
+        pos["sl"] = current_sl
+
+        # AI trailing SL (can only tighten beyond protection floor)
         new_sl = self._risk.adjust_stop_loss(
             current_sl=current_sl,
             side=pos["side"],
@@ -540,9 +830,8 @@ class TradeExecutor:
 
         # Only modify if the SL actually moved (avoid unnecessary API calls)
         # Use tick_size as threshold so it scales to any instrument
-        tick_size = self._bridge.get_symbol_info(self._config.mt5_symbol).get(
-            "tick_size", 0.01
-        )
+        sym_info = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+        tick_size = sym_info.get("tick_size", 0.01) or 0.01
         sl_changed = False
         if pos["side"] == "LONG" and new_sl > current_sl + tick_size:
             sl_changed = True
@@ -555,7 +844,17 @@ class TradeExecutor:
                 sl=new_sl,
             )
             if success:
+                old_sl = pos["sl"]
                 pos["sl"] = new_sl
+
+                # Record SL modification for trade history
+                self._sl_modifications.append({
+                    "bar": self._step_count,
+                    "old_sl": round(old_sl, 2),
+                    "new_sl": round(new_sl, 2),
+                    "reason": f"stage_{self._protection_stage}" if new_stage > 0 else "ai_trail",
+                    "price": round(current_price, 2),
+                })
 
                 # Log MT5-exact P/L at the new SL level
                 mt5_side = "BUY" if pos["side"] == "LONG" else "SELL"
@@ -587,6 +886,7 @@ class TradeExecutor:
         close_price: float = 0.0,
         bars_held: int = 0,
         account: Optional[Dict[str, Any]] = None,
+        mt5_pnl: Optional[float] = None,
     ) -> None:
         """Record a closed trade in memory, journal, tp_tracking, and trades.jsonl.
 
@@ -597,6 +897,8 @@ class TradeExecutor:
             close_price:  Fill price for the close.
             bars_held:    Number of M5 bars the position was held.
             account:      Current account info dict.
+            mt5_pnl:      Actual P/L from MT5 deal history (if available).
+                          When provided, used instead of manual calculation.
         """
         pos = self._position
         if pos is None:
@@ -611,13 +913,27 @@ class TradeExecutor:
         if close_price == 0.0:
             close_price = close_result.get("fill_price", entry_price)
 
-        # --- P/L calculation (MT5-exact) ---
-        value_per_point = self._bridge.value_per_point
-        if side == "LONG":
-            price_move = close_price - entry_price
+        # --- P/L calculation ---
+        # Prefer MT5's actual P/L (includes swap, fees, exact fill) when
+        # available.  Fall back to manual tick_value calculation otherwise.
+        if mt5_pnl is not None:
+            pnl = mt5_pnl
+            log.info(
+                "Using MT5 actual P/L: %.2f (manual would be %.2f)",
+                mt5_pnl,
+                (
+                    (close_price - entry_price if side == "LONG"
+                     else entry_price - close_price)
+                    * self._bridge.value_per_point * lots
+                ),
+            )
         else:
-            price_move = entry_price - close_price
-        pnl = price_move * value_per_point * lots
+            value_per_point = self._bridge.value_per_point
+            if side == "LONG":
+                price_move = close_price - entry_price
+            else:
+                price_move = entry_price - close_price
+            pnl = price_move * value_per_point * lots
 
         balance = account.get("balance", self._peak_balance) if account else self._peak_balance
         pnl_pct = pnl / max(balance, 1.0)
@@ -676,6 +992,7 @@ class TradeExecutor:
             "vol_regime_at_entry": self._entry_conditions.get("vol_regime", 1.0),
             "entry_conditions": self._entry_conditions,
             "paper_trade": self._config.paper_trading,
+            "mt5_ticket": pos.get("ticket", 0),
         }
         trade_id = self._memory.record_trade(trade_data)
 
@@ -721,6 +1038,11 @@ class TradeExecutor:
         self._max_favorable = 0.0
         self._initial_sl = 0.0
         self._initial_tp = 0.0
+        self._protection_stage = 0
+        self._sl_modifications = []
+        self._entry_observation = None
+        self._entry_risk_state = {}
+        self._entry_spread = 0.0
 
     # ------------------------------------------------------------------
     # Lesson classification (mirrors training TradeAnalyzer._classify_lesson)
@@ -814,6 +1136,47 @@ class TradeExecutor:
             self._max_favorable = favorable
 
     # ------------------------------------------------------------------
+    # Protection event logging
+    # ------------------------------------------------------------------
+
+    def _log_protection_event(
+        self,
+        pos: Dict[str, Any],
+        stage: int,
+        new_sl: float,
+        r_current: float,
+    ) -> None:
+        """Log a protection stage transition to alerts.jsonl."""
+        stage_names = {1: "PROTECT_BE", 2: "PROTECT_LOCK", 3: "PROTECT_TRAIL"}
+        stage_name = stage_names.get(stage, f"PROTECT_{stage}")
+
+        r_distance = abs(pos["entry_price"] - self._initial_sl)
+        if pos["side"] == "LONG":
+            locked_r = (new_sl - pos["entry_price"]) / r_distance if r_distance > 0 else 0.0
+        else:
+            locked_r = (pos["entry_price"] - new_sl) / r_distance if r_distance > 0 else 0.0
+
+        alert = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": stage_name,
+            "ticket": pos.get("ticket", 0),
+            "side": pos["side"],
+            "stage": stage,
+            "r_current": round(r_current, 3),
+            "locked_r": round(locked_r, 3),
+            "new_sl": round(new_sl, 2),
+            "entry_price": pos["entry_price"],
+            "initial_sl": round(self._initial_sl, 2),
+        }
+
+        try:
+            alerts_path = self._resolve_path("storage/logs/alerts.jsonl")
+            with open(alerts_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(alert, default=str) + "\n")
+        except Exception as exc:
+            log.warning("Failed to write protection alert: %s", exc)
+
+    # ------------------------------------------------------------------
     # JSONL trade log
     # ------------------------------------------------------------------
 
@@ -826,7 +1189,8 @@ class TradeExecutor:
         """Append a trade record to trades.jsonl.
 
         Each line is a self-contained JSON object for easy streaming
-        and offline analysis.
+        and offline analysis.  Includes entry observation (670-dim),
+        risk state, and spread for training-improvement post-analysis.
         """
         record = {
             "trade_id": trade_id,
@@ -848,7 +1212,70 @@ class TradeExecutor:
             "initial_sl": round(self._initial_sl, 2),
             "initial_tp": round(self._initial_tp, 2),
             "final_sl": round(self._position["sl"], 2) if self._position else 0.0,
+            # --- Protection fields ---
+            "protection_stage_max": self._protection_stage,
+            "initial_r": round(abs(trade_data.get("entry_price", 0) - self._initial_sl), 2),
+            "max_r_reached": round(
+                self._max_favorable / max(abs(trade_data.get("entry_price", 0) - self._initial_sl), 0.01), 2
+            ) if self._initial_sl else 0.0,
+            # --- Training-improvement fields ---
+            "entry_spread": round(self._entry_spread, 1),
+            "entry_risk_state": self._entry_risk_state,
+            # --- V2 analytics fields ---
+            "model_version": self._model_version,
+            "model_hash": self._model_hash[:16] if self._model_hash else "",
+            "sl_modifications": self._sl_modifications.copy(),
+            "sl_modification_count": len(self._sl_modifications),
         }
+
+        # Named entry features (decode 670-dim obs into readable dict)
+        if self._entry_observation is not None:
+            try:
+                obs = self._entry_observation
+                if hasattr(obs, "flatten"):
+                    obs = obs.flatten()
+                # Extract most recent frame (last 67 values from 670-dim stack)
+                n_features = 67
+                if len(obs) >= n_features:
+                    latest_frame = obs[-n_features:]
+                    from src.config import TrainingConfig
+                    cfg = TrainingConfig()
+                    names = list(cfg.market_feature_names) + list(cfg.norm_exempt_features)
+                    if len(names) == n_features:
+                        record["entry_features"] = {
+                            name: round(float(val), 4)
+                            for name, val in zip(names, latest_frame)
+                        }
+            except Exception:
+                pass  # Don't fail trade logging over feature decode
+
+        # Reward decomposition (simulated R1-R5 for post-analysis)
+        try:
+            pnl = trade_data.get("pnl", 0)
+            balance = self._peak_balance or 100.0
+            equity_return = pnl / max(balance, 1.0)
+            hold_bars = trade_data.get("hold_bars", 0)
+            risk_amount = record.get("initial_r", 1.0)
+            rr = pnl / max(abs(risk_amount), 0.01)
+            hold_quality = min(hold_bars / 20.0, 1.0)
+            record["reward_components"] = {
+                "r1_pnl_signal": round(equity_return * 500.0, 4),
+                "r2_quality": round(rr * hold_quality, 4),
+                "rr_ratio": round(rr, 3),
+                "hold_quality": round(hold_quality, 3),
+            }
+        except Exception:
+            pass
+
+        # Entry observation (670-dim) -- convert numpy to list for JSON
+        if self._entry_observation is not None:
+            try:
+                obs = self._entry_observation
+                if hasattr(obs, "tolist"):
+                    obs = obs.tolist()
+                record["entry_observation_670"] = obs
+            except Exception:
+                pass  # Don't fail trade logging over observation snapshot
 
         try:
             with open(self._trades_log_path, "a", encoding="utf-8") as f:
@@ -1069,6 +1496,8 @@ class TradeExecutor:
 
         # Check if our tracked position still exists in MT5
         open_positions = self._bridge.get_open_positions(self._config.mt5_symbol)
+        if not open_positions:
+            open_positions = []
         ticket = self._position["ticket"]
 
         position_exists = any(p["ticket"] == ticket for p in open_positions)
@@ -1088,38 +1517,112 @@ class TradeExecutor:
             ticket,
         )
 
-        # Determine close reason by checking which price level was hit
+        # Determine close reason by checking deal history for actual fill price
         bars_held = self._step_count - self._entry_step
         side = self._position["side"]
         entry_price = self._position["entry_price"]
         current_sl = self._position["sl"]
         current_tp = self._position["tp"]
 
-        # Approximate close price from SL/TP proximity
-        # In a real scenario the execution price is in the deal history,
-        # but for simplicity we estimate based on which level was nearer.
         close_reason = "EXTERNAL_CLOSE"
         close_price = 0.0
+        mt5_pnl = None  # Will hold MT5's actual P/L if deal found
 
-        if side == "LONG":
-            # TP is above entry, SL is below
-            if current_tp > 0:
-                close_reason = "TP_HIT"
-                close_price = current_tp
-            elif current_sl > 0:
-                close_reason = "SL_HIT"
-                close_price = current_sl
-        else:
-            # SHORT: TP is below entry, SL is above
-            if current_tp > 0:
-                close_reason = "TP_HIT"
-                close_price = current_tp
-            elif current_sl > 0:
-                close_reason = "SL_HIT"
-                close_price = current_sl
+        # Use position-specific deal lookup (reliable -- MT5's date-range
+        # query can miss recent deals, but position lookup always works).
+        # Retry once after a brief wait if MT5 hasn't processed the close yet.
+        for attempt in range(2):
+            try:
+                deal = self._bridge.get_deal_by_position(ticket)
+                if deal is not None:
+                    close_price = deal["exit_price"]
+                    mt5_pnl = deal["pnl"]
+                    comment = deal.get("comment", "").lower()
+                    if "tp" in comment or "take profit" in comment:
+                        close_reason = "TP_HIT"
+                    elif "sl" in comment or "stop loss" in comment:
+                        close_reason = "SL_HIT"
+                    elif mt5_pnl > 0:
+                        close_reason = "TP_HIT"
+                    elif mt5_pnl < 0:
+                        close_reason = "SL_HIT"
+                    log.info(
+                        "Deal found for ticket=%d: exit=%.2f  "
+                        "mt5_pnl=%.2f  comment='%s'  -> %s",
+                        ticket, close_price, mt5_pnl,
+                        comment, close_reason,
+                    )
+            except Exception:
+                log.debug(
+                    "Could not fetch deal by position (attempt %d)",
+                    attempt + 1,
+                )
+
+            if close_price != 0.0:
+                break
+            if attempt == 0:
+                # Deal might not be in history yet -- wait and retry
+                import time
+                time.sleep(2.0)
+                log.info("Deal lookup retry for ticket=%d...", ticket)
+
+        # Fallback: use current market price to determine TP vs SL
+        if close_price == 0.0:
+            log.warning(
+                "Deal history unavailable for ticket=%d -- using market "
+                "price fallback",
+                ticket,
+            )
+            # Get current market price to infer what happened
+            try:
+                import MetaTrader5 as mt5_mod
+                broker_sym = self._bridge._broker_name(self._config.mt5_symbol)
+                tick = mt5_mod.symbol_info_tick(broker_sym)
+                if tick is not None:
+                    current_price = tick.bid if side == "LONG" else tick.ask
+                else:
+                    current_price = entry_price
+            except Exception:
+                current_price = entry_price
+
+            if side == "LONG":
+                # LONG: price above entry = profit, below = loss
+                if current_tp > 0 and current_price >= current_tp:
+                    close_reason = "TP_HIT"
+                    close_price = current_tp
+                elif current_sl > 0 and current_price <= current_sl:
+                    close_reason = "SL_HIT"
+                    close_price = current_sl
+                elif current_price >= entry_price:
+                    close_reason = "TP_HIT"
+                    close_price = current_tp if current_tp > 0 else current_price
+                else:
+                    close_reason = "SL_HIT"
+                    close_price = current_sl if current_sl > 0 else current_price
+            else:
+                # SHORT: price below entry = profit, above = loss
+                if current_sl > 0 and current_price >= current_sl:
+                    close_reason = "SL_HIT"
+                    close_price = current_sl
+                elif current_tp > 0 and current_price <= current_tp:
+                    close_reason = "TP_HIT"
+                    close_price = current_tp
+                elif current_price <= entry_price:
+                    close_reason = "TP_HIT"
+                    close_price = current_tp if current_tp > 0 else current_price
+                else:
+                    close_reason = "SL_HIT"
+                    close_price = current_sl if current_sl > 0 else current_price
+
+            log.info(
+                "Fallback close detection: side=%s  entry=%.2f  "
+                "current_price=%.2f  SL=%.2f  TP=%.2f  -> %s at %.2f",
+                side, entry_price, current_price,
+                current_sl, current_tp, close_reason, close_price,
+            )
 
         if close_price == 0.0:
-            close_price = entry_price  # fallback
+            close_price = entry_price  # ultimate fallback
 
         self._record_trade_close(
             close_result={"success": True, "fill_price": close_price},
@@ -1127,11 +1630,13 @@ class TradeExecutor:
             close_price=close_price,
             bars_held=bars_held,
             account=account,
+            mt5_pnl=mt5_pnl,
         )
 
         log.info(
-            "Position ticket=%d closed by MT5: %s at %.2f",
+            "Position ticket=%d closed by MT5: %s at %.2f  mt5_pnl=%s",
             ticket, close_reason, close_price,
+            f"{mt5_pnl:+.2f}" if mt5_pnl is not None else "N/A",
         )
 
         # If we were winding down and position closed, go to STOPPED

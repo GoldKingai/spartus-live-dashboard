@@ -104,12 +104,25 @@ class LiveConfig:
     max_risk_pct: float = 0.02
     max_dd: float = 0.10
     max_daily_dd: float = 0.03
-    daily_trade_hard_cap: int = 20
-    min_hold_bars: int = 3
+    daily_trade_soft_cap: int = 10        # After this, conviction must exceed elevated threshold
+    daily_trade_hard_cap: int = 20        # Absolute max — no exceptions
+    min_hold_bars: int = 6
+    min_sl_atr: float = 1.0              # Minimum SL distance: 1.0 ATR (matches training)
+    min_sl_trail_atr: float = 0.5        # Minimum trailing SL distance: 0.5 ATR (matches training)
     direction_threshold: float = 0.3
-    min_conviction: float = 0.15          # Separate conviction floor (model output compressed)
+    min_conviction: float = 0.30          # Raised from 0.15 based on Week 1 data (conv<0.3 = net negative)
+    elevated_conviction_threshold: float = 0.6  # Required after soft cap reached
     exit_threshold: float = 0.5
     allow_min_lot_override: bool = False  # Disabled: min-lot must still pass hard risk cap
+
+    # ---- Profit Protection (rule-based staged SL) -------------------------
+    protection_be_trigger_r: float = 1.0       # Stage 1: breakeven at +1.0R
+    protection_be_buffer_pips: float = 0.5     # Buffer above entry for BE
+    protection_lock_trigger_r: float = 1.5     # Stage 2: lock profit at +1.5R
+    protection_lock_amount_r: float = 0.5      # Lock +0.5R guaranteed
+    protection_trail_trigger_r: float = 2.0    # Stage 3: ATR trail at +2.0R
+    protection_trail_atr_mult: float = 1.0     # Trail distance = 1.0 * ATR
+    point: float = 0.01                        # XAUUSD price point
 
     # ---- Circuit breakers ------------------------------------------------
     consecutive_loss_pause: int = 5
@@ -131,6 +144,17 @@ class LiveConfig:
     norm_window: int = 200
     norm_clip: float = 5.0
     frame_stack: int = 10
+
+    # ---- Normalization mode -----------------------------------------------
+    # "adaptive" = rolling 200-bar z-score (original, updates live)
+    # "frozen"   = use training baseline mean/std (deterministic, immune to crashes)
+    normalization_mode: str = "frozen"
+
+    # ---- Auto-reset detector (for adaptive mode) --------------------------
+    # Triggers automatic normalizer reset if distribution deviates too far.
+    auto_reset_z_abs_mean_threshold: float = 3.5
+    auto_reset_pct_features_over_4sigma: float = 0.20  # 20% of features
+    auto_reset_cooldown_bars: int = 50  # Min bars between auto-resets
 
     # ---- Calendar --------------------------------------------------------
     # MQL5 bridge: CalendarBridge.mq5 writes to MT5 Common Files folder.
@@ -200,6 +224,47 @@ class LiveConfig:
     norm_exempt_features: List[str] = field(
         default_factory=_default_norm_exempt_features,
     )
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def validate(self) -> List[str]:
+        """Validate config values and return a list of warnings/errors.
+
+        Returns:
+            List of warning messages.  Empty means all valid.
+        """
+        issues: List[str] = []
+
+        if self.max_risk_pct <= 0 or self.max_risk_pct > 0.10:
+            issues.append(f"max_risk_pct={self.max_risk_pct} should be in (0, 0.10]")
+        if self.max_dd <= 0 or self.max_dd > 0.50:
+            issues.append(f"max_dd={self.max_dd} should be in (0, 0.50]")
+        if self.direction_threshold < 0 or self.direction_threshold > 1.0:
+            issues.append(f"direction_threshold={self.direction_threshold} should be in [0, 1.0]")
+        if self.exit_threshold < 0 or self.exit_threshold > 1.0:
+            issues.append(f"exit_threshold={self.exit_threshold} should be in [0, 1.0]")
+        if self.min_hold_bars < 0:
+            issues.append(f"min_hold_bars={self.min_hold_bars} should be >= 0")
+        if self.daily_trade_hard_cap < 1:
+            issues.append(f"daily_trade_hard_cap={self.daily_trade_hard_cap} should be >= 1")
+        if self.n_features != 67:
+            issues.append(f"n_features={self.n_features} should be 67")
+        if self.obs_dim != self.n_features * self.frame_stack:
+            issues.append(
+                f"obs_dim={self.obs_dim} should be n_features*frame_stack="
+                f"{self.n_features * self.frame_stack}"
+            )
+        if len(self.market_feature_names) != self.n_market_features:
+            issues.append(
+                f"market_feature_names has {len(self.market_feature_names)} items, "
+                f"expected {self.n_market_features}"
+            )
+        if self.absolute_risk_cap_pct <= 0:
+            issues.append(f"absolute_risk_cap_pct={self.absolute_risk_cap_pct} should be > 0")
+
+        return issues
 
     # ------------------------------------------------------------------
     # Class methods

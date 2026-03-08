@@ -233,6 +233,11 @@ class SpartusOrchestrator:
             self._config.model_path,
         )
 
+        # Validate config
+        config_issues = self._config.validate()
+        for issue in config_issues:
+            log.warning("Config validation: %s", issue)
+
         # 2. Ensure storage directories
         self._ensure_storage_dirs()
 
@@ -332,6 +337,12 @@ class SpartusOrchestrator:
         self._broker_constraints.heavy_refresh(force=True)
         self._broker_constraints.light_refresh(force=True)
         self._executor.set_broker_constraints(self._broker_constraints)
+        # Inject model version for trade traceability
+        _meta = self._model_components.get("metadata", {})
+        self._executor.set_model_version(
+            version=f"W{_meta.get('week', '?')}",
+            file_hash=self._model_components.get("config", {}).get("model_file_hash", ""),
+        )
         log.info("Broker constraints initialized and injected into executor")
 
         # 10c. Auto-detect MT5 Common Files path for CalendarBridge
@@ -348,10 +359,27 @@ class SpartusOrchestrator:
         # 11. Feature Pipeline -> warmup
         self._pipeline = LiveFeaturePipeline(self._config)
 
-        # Try loading saved normalizer state first
-        norm_loaded = self._pipeline.load_normalizer_state()
-        if norm_loaded:
-            log.info("Normalizer state restored from disk")
+        # Load training feature baseline (for frozen mode + adaptive clamp cap)
+        feature_baseline = self._model_components.get("feature_baseline", {})
+        if feature_baseline:
+            self._pipeline.set_feature_baseline(feature_baseline)
+            log.info(
+                "Feature baseline from model package: %d features (mode=%s)",
+                len(feature_baseline),
+                self._config.normalization_mode,
+            )
+        elif self._config.normalization_mode == "frozen":
+            log.warning(
+                "FROZEN mode selected but no feature_baseline in model package! "
+                "Falling back to adaptive mode."
+            )
+            self._config.normalization_mode = "adaptive"
+
+        # Try loading saved normalizer state first (adaptive mode only)
+        if self._config.normalization_mode == "adaptive":
+            norm_loaded = self._pipeline.load_normalizer_state()
+            if norm_loaded:
+                log.info("Normalizer state restored from disk")
 
         warmup_ok = self._pipeline.warmup(self._mt5_bridge)
         if not warmup_ok:
@@ -569,6 +597,7 @@ class SpartusOrchestrator:
         self._tab_alerts.stop_requested.connect(self._on_stop_trading)
         self._tab_alerts.emergency_stop_requested.connect(self._on_emergency_stop)
         self._tab_alerts.reset_cb_requested.connect(self._on_reset_circuit_breaker)
+        self._tab_alerts.reset_normalizer_requested.connect(self._on_reset_normalizer)
 
     # ==================================================================
     # Button Callbacks
@@ -586,6 +615,16 @@ class SpartusOrchestrator:
 
         self._executor.start_trading()
         self._dashboard.set_trading_state(DashState.RUNNING)
+
+        # Reconcile MT5 deal history -- recover any trades that closed
+        # while the dashboard was down (TP/SL hit during restart)
+        reconciled = self._executor.reconcile_trade_history()
+        if reconciled > 0:
+            self._add_alert(
+                "WARN",
+                f"Recovered {reconciled} missed trade(s) from MT5 history",
+            )
+
         if self._executor.has_position():
             self._add_alert("INFO", "Trading STARTED (recovered existing position)")
         else:
@@ -628,6 +667,19 @@ class SpartusOrchestrator:
         self._add_alert("INFO", "Circuit breaker RESET by user")
         log.info("Circuit breaker reset by user")
 
+    def _on_reset_normalizer(self) -> None:
+        """Reset normalizer -- clear contaminated z-score buffers and re-warm.
+
+        This is the recovery action for conviction collapse caused by
+        violent market moves poisoning the rolling z-score buffers.
+        """
+        if self._pipeline is None:
+            self._add_alert("WARN", "Cannot reset normalizer: pipeline not initialized")
+            return
+        self._pipeline.reset_normalizer()
+        self._add_alert("INFO", "Normalizer RESET -- z-score buffers cleared and re-warmed")
+        log.info("Normalizer reset by user (conviction collapse recovery)")
+
     def _handle_emergency_stop(self) -> None:
         """Called by MT5Bridge heartbeat when connection is lost."""
         log.critical("MT5 connection lost -- activating emergency stop")
@@ -651,6 +703,7 @@ class SpartusOrchestrator:
             self._trading_loop_inner()
         except Exception:
             log.exception("Error in trading loop")
+            self._add_alert("ERROR", "Trading loop error -- check logs")
 
     def _trading_loop_inner(self) -> None:
         """Inner trading loop logic (unwrapped from exception handler)."""
@@ -696,10 +749,9 @@ class SpartusOrchestrator:
                 "INFO",
                 f"Position closed by MT5: {sync_result}",
             )
-            # Record in circuit breaker
-            pos_info = self._executor.get_position()
-            # Position is already cleared in sync_position, so we check
-            # the risk manager's latest tracking
+            # Record in circuit breaker -- sync_position already called
+            # _record_trade_close which updates risk_manager.  Use
+            # consecutive_losses as the indicator: if > 0, last trade lost.
             risk_status = self._risk_manager.get_safety_status()
             if risk_status.get("consecutive_losses", 0) > 0:
                 self._circuit_breaker.record_loss()
@@ -795,6 +847,14 @@ class SpartusOrchestrator:
 
         # --- Run inference ---
         action = self._inference.predict(observation)
+
+        # Validate action output for NaN/Inf
+        for key in ("direction", "conviction", "exit_urgency", "sl_adjustment"):
+            val = action.get(key, 0.0)
+            if not np.isfinite(val):
+                log.error("Inference produced %s=%s -- replacing with 0.0", key, val)
+                action[key] = 0.0
+
         self._last_action = action
 
         # Record action in history for analytics
@@ -812,6 +872,16 @@ class SpartusOrchestrator:
         if not m5_bars.empty:
             bar_data["high"] = float(m5_bars["high"].iloc[-1])
             bar_data["low"] = float(m5_bars["low"].iloc[-1])
+
+        # Pass bar context to executor for trade-entry snapshots
+        _spread = 0.0
+        if hasattr(self, "_broker_constraints") and self._broker_constraints is not None:
+            _spread = self._broker_constraints.spread_current_points
+        self._executor.set_bar_context(
+            observation=observation,
+            risk_state=self._risk_manager.get_safety_status(),
+            spread=_spread,
+        )
 
         # Only execute if safety systems allow (or if already in position)
         if self._executor.has_position() or (cb_allowed and wk_allowed and spread_allowed):
@@ -861,6 +931,22 @@ class SpartusOrchestrator:
                 "equity": equity,
                 "price": current_price,
                 "atr": atr,
+                "spread_points": _spread,
+                "cb_allowed": cb_allowed,
+                "cb_reason": cb_reason if not cb_allowed else None,
+                "wk_allowed": wk_allowed,
+                "spread_allowed": spread_allowed,
+                "spread_reason": spread_reason if not spread_allowed else None,
+                "consecutive_losses": self._risk_manager.consecutive_losses,
+                "daily_pnl": self._risk_manager.daily_pnl,
+                # V2: structured block analysis
+                "blocked_by": (
+                    "circuit_breaker" if not cb_allowed else
+                    "weekend_manager" if not wk_allowed else
+                    "spread_filter" if not spread_allowed else
+                    None
+                ),
+                "protection_stage": self._executor._protection_stage if self._executor.has_position() else None,
             })
 
         # --- Compute minlot risk % and simplified reason for transparency ---
@@ -1099,12 +1185,39 @@ class SpartusOrchestrator:
         if utc_now.hour == self._config.daily_reset_utc_hour:
             day_of_year = utc_now.timetuple().tm_yday
             if day_of_year != self._last_daily_reset_day:
-                self._last_daily_reset_day = day_of_year
-                self._risk_manager.reset_daily()
-                self._circuit_breaker.reset_daily()
-                self._executor.reset_daily()
-                self._add_alert("INFO", "Daily reset completed")
-                log.info("Daily reset completed")
+                try:
+                    self._risk_manager.reset_daily()
+                    self._circuit_breaker.reset_daily()
+                    self._executor.reset_daily()
+                    self._last_daily_reset_day = day_of_year
+                    self._add_alert("INFO", "Daily reset completed")
+                    log.info("Daily reset completed")
+                except Exception:
+                    log.exception("Daily reset failed -- will retry next cycle")
+
+        # Weekly summary generation (Friday 22:00 UTC)
+        if (
+            utc_now.weekday() == 4  # Friday
+            and utc_now.hour == 22
+            and self._live_logger
+            and not getattr(self, "_weekly_summary_done", False)
+        ):
+            try:
+                summary = self._live_logger.generate_weekly_summary()
+                if summary:
+                    log.info("Weekly summary generated: %d trades, PF=%.2f",
+                             summary.get("total_trades", 0),
+                             summary.get("profit_factor", 0))
+                    self._add_alert("INFO", f"Weekly summary: {summary.get('total_trades', 0)} trades, "
+                                    f"PF={summary.get('profit_factor', 0):.2f}, "
+                                    f"P/L={summary.get('net_pnl', 0):+.2f}")
+                self._weekly_summary_done = True
+            except Exception:
+                log.exception("Weekly summary generation failed")
+
+        # Reset weekly summary flag on Saturday
+        if utc_now.weekday() == 5:
+            self._weekly_summary_done = False
 
         # Feature stats logging (every 12 bars)
         if (
@@ -1245,13 +1358,34 @@ class SpartusOrchestrator:
             if not bars.empty:
                 current_price = float(bars["close"].iloc[-1])
 
-            pnl = self._position_manager.get_unrealized_pnl(current_price)
-            duration = self._position_manager.get_position_duration_minutes()
+            # Compute P&L directly from executor position (position_manager
+            # is not synced after new trades -- this avoids that gap).
+            entry = pos["entry_price"]
+            lots = pos["lots"]
+            if current_price > 0 and entry > 0:
+                sym_info = self._mt5_bridge.get_symbol_info()
+                tick_value = sym_info.get("tick_value", 0.745)
+                tick_size = sym_info.get("tick_size", 0.01)
+                price_move = (
+                    (current_price - entry) if pos["side"] == "LONG"
+                    else (entry - current_price)
+                )
+                ticks = price_move / tick_size if tick_size > 0 else 0.0
+                pnl = ticks * tick_value * lots
+            else:
+                pnl = 0.0
+
+            # Duration from open_time stored by executor
+            open_time = pos.get("open_time")
+            if open_time:
+                duration = (datetime.now(timezone.utc) - open_time).total_seconds() / 60.0
+            else:
+                duration = 0.0
 
             position_data = {
                 "side": pos["side"],
-                "lots": pos["lots"],
-                "entry_price": pos["entry_price"],
+                "lots": lots,
+                "entry_price": entry,
                 "current_price": current_price,
                 "pnl": round(pnl, 2),
                 "sl": pos.get("sl", 0.0),
@@ -1260,21 +1394,31 @@ class SpartusOrchestrator:
                 "trailing": pos.get("sl", 0) != self._executor._initial_sl,
             }
 
-        # Today's summary
-        risk_status = (
-            self._risk_manager.get_safety_status()
-            if self._risk_manager is not None
-            else {}
-        )
-        today_data = {
-            "trades": risk_status.get("daily_trade_count", 0),
-            "wins": risk_status.get("total_wins", 0),
-            "losses": risk_status.get("total_trades", 0) - risk_status.get("total_wins", 0),
-            "pnl": risk_status.get("daily_pnl", 0.0),
-            "win_rate": risk_status.get("win_rate", 0.0),
-            "max_dd": 0.0,
-            "profit_factor": 0.0,
-        }
+        # Today's summary — sourced from the database so data persists
+        # across restarts.  Falls back to risk-manager in-memory counters
+        # only when the database is unavailable.
+        if self._memory is not None:
+            today_data = self._memory.get_today_summary()
+        else:
+            risk_status = (
+                self._risk_manager.get_safety_status()
+                if self._risk_manager is not None
+                else {}
+            )
+            today_data = {
+                "trades": risk_status.get("daily_trade_count", 0),
+                "wins": risk_status.get("total_wins", 0),
+                "losses": (
+                    risk_status.get("total_trades", 0)
+                    - risk_status.get("total_wins", 0)
+                ),
+                "pnl": risk_status.get("daily_pnl", 0.0),
+                "win_rate": round(
+                    risk_status.get("win_rate", 0.0) * 100, 1
+                ),
+                "max_dd": 0.0,
+                "profit_factor": 0.0,
+            }
 
         # Decisions
         decisions = list(self._decision_log)
@@ -1363,7 +1507,7 @@ class SpartusOrchestrator:
 
         metrics = {
             "sharpe": round(float(sharpe), 2),
-            "win_rate": round(win_rate, 4),
+            "win_rate": round(win_rate * 100, 1),
             "pf": round(pf, 2),
             "avg_trade": round(avg_trade, 2),
             "max_dd": round(max_dd * 100, 2),
@@ -1672,19 +1816,96 @@ class SpartusOrchestrator:
             "avg_trades_day": 0.0,
         }
 
-        # Training comparison
+        # Training comparison -- compute live metrics from trade history
         metadata = self._model_components.get("metadata", {})
         stress = self._model_components.get("stress_results", {})
         training_comparison = {}
+
+        # Compute live metrics from recent trades
+        recent_trades = (
+            self._memory.get_recent_trades(limit=500)
+            if self._memory is not None
+            else []
+        )
+        live_metrics: Dict[str, Any] = {}
+        if recent_trades:
+            pnls = [t.get("pnl", 0.0) for t in recent_trades]
+            total_t = len(pnls)
+            wins_t = sum(1 for p in pnls if p > 0)
+            gross_profit = sum(p for p in pnls if p > 0)
+            gross_loss = abs(sum(p for p in pnls if p < 0))
+            live_metrics["PF"] = round(
+                gross_profit / gross_loss if gross_loss > 0 else 0.0, 2
+            )
+            live_metrics["Win Rate"] = f"{wins_t / total_t * 100:.0f}%" if total_t else "--"
+            # Max drawdown from balance series
+            bal = self._initial_balance or 1000.0
+            peak = bal
+            max_dd = 0.0
+            for p in reversed(pnls):  # oldest first
+                bal += p
+                if bal > peak:
+                    peak = bal
+                dd = (peak - bal) / peak if peak > 0 else 0.0
+                if dd > max_dd:
+                    max_dd = dd
+            live_metrics["MaxDD"] = f"{max_dd * 100:.1f}%"
+            unique_days = set(
+                t.get("timestamp", "")[:10] for t in recent_trades
+                if t.get("timestamp")
+            )
+            live_metrics["Trades/Day"] = round(
+                total_t / max(1, len(unique_days)), 1
+            )
+            # TIM% (time-in-market) — approximate from hold_bars
+            total_bars = self._step_count or 1
+            bars_in_market = sum(t.get("hold_bars", 0) for t in recent_trades)
+            live_metrics["TIM%"] = f"{bars_in_market / total_bars * 100:.1f}%"
+            # Avg Hold (minutes)
+            avg_hold_bars = np.mean(
+                [t.get("hold_bars", 0) for t in recent_trades]
+            )
+            live_metrics["Avg Hold"] = f"{avg_hold_bars * 5:.0f}m"
+            # Sharpe (annualised estimate from trade P/Ls)
+            if len(pnls) >= 5:
+                mean_pnl = np.mean(pnls)
+                std_pnl = np.std(pnls)
+                sharpe_est = (
+                    mean_pnl / std_pnl * np.sqrt(252) if std_pnl > 0 else 0.0
+                )
+                live_metrics["Sharpe"] = round(float(sharpe_est), 2)
+
+        # Build comparison table: training (from metadata) vs live
+        train_metrics = {
+            "PF": metadata.get("val_pf", metadata.get("profit_factor", "--")),
+            "Win Rate": metadata.get("val_win_rate", "--"),
+            "MaxDD": metadata.get("val_max_dd", "--"),
+            "Trades/Day": metadata.get("val_trades_per_day", "--"),
+            "TIM%": metadata.get("val_tim_pct", "--"),
+            "Avg Hold": metadata.get("val_avg_hold", "--"),
+            "Sharpe": metadata.get("val_sharpe", "--"),
+        }
+        # If stress results available, use those for training columns
         if stress:
             for metric_name, values in stress.items():
                 if isinstance(values, dict):
                     training_comparison[metric_name] = {
                         "val": values.get("val", "--"),
                         "test": values.get("test", "--"),
-                        "live": "--",
+                        "live": live_metrics.get(metric_name, "--"),
                         "status": "green",
                     }
+        else:
+            # Fall back to metadata + live
+            for metric_name in ["PF", "Win Rate", "MaxDD", "Trades/Day", "TIM%", "Avg Hold", "Sharpe"]:
+                tv = train_metrics.get(metric_name, "--")
+                lv = live_metrics.get(metric_name, "--")
+                training_comparison[metric_name] = {
+                    "val": tv,
+                    "test": "--",
+                    "live": lv,
+                    "status": "green" if lv != "--" else "yellow",
+                }
 
         # Session breakdown
         session_breakdown = (
@@ -1700,19 +1921,62 @@ class SpartusOrchestrator:
             else {}
         )
 
-        # Feature drift
-        baseline = self._model_components.get("feature_baseline", {})
+        # Feature drift -- compare live normalizer stats to initial warmup
+        normalizer_stats = (
+            self._pipeline.get_normalizer_stats()
+            if self._pipeline is not None
+            else {}
+        )
+        drifted_features = []
+        total_baselined = 0
+        within_threshold = 0
+        for fname, stats in normalizer_stats.items():
+            count = stats.get("count", 0)
+            if count < 50:
+                continue  # Not enough data yet
+            total_baselined += 1
+            mean = stats.get("mean", 0.0)
+            std = stats.get("std", 1.0)
+            # For z-scored features, mean should be near 0, std near 1.
+            # Drift = |mean| > 2.0 (feature mean shifted 2+ sigma)
+            if abs(mean) <= 2.0:
+                within_threshold += 1
+            else:
+                drifted_features.append({
+                    "name": fname,
+                    "live_mean": round(mean, 3),
+                    "train_mean": 0.0,
+                    "sigma_distance": round(abs(mean), 2),
+                })
+
         feature_drift = {
-            "total_baselined": len(baseline),
-            "within_threshold": len(baseline),
-            "drifted_features": [],
+            "total_baselined": total_baselined,
+            "within_threshold": within_threshold,
+            "drifted_features": drifted_features,
         }
 
-        # Correlation drift
-        corr_baseline = self._model_components.get("correlation_baseline", {})
+        # Correlation drift -- basic stability check
+        # Compare mean absolute z-score across features as a proxy
+        if normalizer_stats:
+            abs_means = [
+                abs(s.get("mean", 0.0))
+                for s in normalizer_stats.values()
+                if s.get("count", 0) >= 50
+            ]
+            corr_score = round(np.mean(abs_means), 3) if abs_means else 0.0
+            if corr_score > 1.5:
+                corr_status = "CRITICAL"
+            elif corr_score > 0.8:
+                corr_status = "WARNING"
+            else:
+                corr_status = "OK"
+        else:
+            corr_score = 0.0
+            corr_status = "OK"
+
         correlation_drift = {
-            "score": 0.0,
-            "status": "OK",
+            "score": corr_score,
+            "status": corr_status,
             "yellow_consecutive": 0,
             "red_consecutive": 0,
         }

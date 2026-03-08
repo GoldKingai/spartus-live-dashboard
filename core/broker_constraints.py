@@ -26,14 +26,14 @@ class BrokerSnapshot:
     volume_step: float = 0.01
     stops_level: int = 0        # trade_stops_level (integer points)
     freeze_level: int = 0       # trade_freeze_level (integer points)
-    tick_value: float = 1.0     # trade_tick_value (account currency)
+    tick_value: float = 0.745   # trade_tick_value (GBP account fallback)
     tick_size: float = 0.01     # trade_tick_size
     contract_size: float = 100.0
     point: float = 0.01
     digits: int = 2
 
     # Computed
-    value_per_point: float = 100.0  # tick_value / tick_size
+    value_per_point: float = 74.5   # tick_value / tick_size (GBP)
 
     # From light refresh
     spread_current: float = 0.0         # Current spread in price (e.g. 0.21)
@@ -87,7 +87,7 @@ class BrokerConstraints:
         self._volume_min: float = 0.01
         self._volume_max: float = 100.0
         self._volume_step: float = 0.01
-        self._tick_value: float = 1.0
+        self._tick_value: float = 0.745
         self._tick_size: float = 0.01
         self._contract_size: float = 100.0
         self._point: float = 0.01
@@ -148,7 +148,7 @@ class BrokerConstraints:
                     "Broker stops_level CHANGED: %d -> %d",
                     old_stops, self._stops_level,
                 )
-            if abs(old_tv - self._tick_value) > 0.001 and old_tv != 1.0:
+            if abs(old_tv - self._tick_value) > 0.001 and old_tv != 0.745:
                 log.info(
                     "Broker tick_value updated: %.5f -> %.5f",
                     old_tv, self._tick_value,

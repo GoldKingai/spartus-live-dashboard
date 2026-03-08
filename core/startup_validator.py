@@ -426,14 +426,25 @@ class StartupValidator:
             normalizer = self.pipeline.get_normalizer()
             if normalizer is None:
                 return False, "Normalizer is None"
-            # Check that the normalizer has buffers populated
+
+            # In frozen mode, buffers are NOT used -- baseline mean/std is used directly.
+            # Check that the baseline is loaded instead of checking buffer counts.
+            mode = getattr(normalizer, "_mode", "adaptive")
+            if mode == "frozen":
+                has_baseline = getattr(normalizer, "_has_baseline", False)
+                if has_baseline:
+                    n = len(getattr(normalizer, "_baseline", {}))
+                    return True, f"Normalizer active (frozen mode): {n} baseline features loaded"
+                return False, "Normalizer in frozen mode but no baseline loaded"
+
+            # Adaptive mode: check that the normalizer has buffers populated
             stats = normalizer.get_buffer_stats()
             populated = sum(
                 1 for s in stats.values() if s.get("count", 0) > 0
             )
             total = len(stats)
             if populated > 0:
-                return True, f"Normalizer active: {populated}/{total} features have data"
+                return True, f"Normalizer active (adaptive): {populated}/{total} features have data"
             return False, "Normalizer has no data in buffers"
         except Exception as e:
             return False, f"Failed to check normalizer: {e}"

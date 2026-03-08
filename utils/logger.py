@@ -122,6 +122,90 @@ class LiveLogger:
             log.error(f"Failed to read {filename}: {e}")
         return results
 
+    def generate_weekly_summary(self) -> dict:
+        """Generate and log a weekly performance summary from trades.jsonl.
+
+        Call this at the end of each trading week (e.g. Friday 22:00 UTC)
+        or on manual request. Reads all trades from the current week
+        and computes aggregate metrics for post-analysis.
+
+        Returns:
+            The summary dict that was logged.
+        """
+        from datetime import timedelta
+        from collections import Counter
+
+        all_trades = self.get_all_trades()
+        if not all_trades:
+            return {}
+
+        # Determine current week boundary (Monday 00:00 UTC)
+        now = datetime.now(timezone.utc)
+        days_since_monday = now.weekday()
+        week_start = (now - timedelta(days=days_since_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        # Filter trades to this week
+        week_trades = []
+        for t in all_trades:
+            ts = t.get("timestamp", "")
+            if ts and ts >= week_start.isoformat():
+                week_trades.append(t)
+
+        if not week_trades:
+            return {}
+
+        pnls = [t.get("pnl", 0) or 0 for t in week_trades]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        lessons = Counter(t.get("lesson_type", "UNKNOWN") for t in week_trades)
+        sessions = Counter(t.get("session", "UNKNOWN") for t in week_trades)
+        sides = Counter(t.get("side", "?") for t in week_trades)
+        convictions = [t.get("conviction", 0) or 0 for t in week_trades]
+        holds = [t.get("hold_bars", 0) or 0 for t in week_trades]
+        close_reasons = Counter(t.get("close_reason", "?") for t in week_trades)
+
+        # Protection stage stats
+        protection_stages = [t.get("protection_stage_max", 0) or 0 for t in week_trades]
+        sl_mod_counts = [t.get("sl_modification_count", 0) or 0 for t in week_trades]
+
+        gross_profit = sum(wins) if wins else 0
+        gross_loss = abs(sum(losses)) if losses else 0
+
+        summary = {
+            "week_start": week_start.isoformat(),
+            "week_end": now.isoformat(),
+            "total_trades": len(week_trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / max(len(week_trades), 1) * 100, 1),
+            "net_pnl": round(sum(pnls), 2),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": round(gross_profit / max(gross_loss, 0.01), 2),
+            "avg_pnl": round(sum(pnls) / max(len(pnls), 1), 4),
+            "avg_win": round(sum(wins) / max(len(wins), 1), 4) if wins else 0,
+            "avg_loss": round(sum(losses) / max(len(losses), 1), 4) if losses else 0,
+            "best_trade": round(max(pnls), 4),
+            "worst_trade": round(min(pnls), 4),
+            "avg_conviction": round(sum(convictions) / max(len(convictions), 1), 3),
+            "avg_hold_bars": round(sum(holds) / max(len(holds), 1), 1),
+            "lesson_breakdown": dict(lessons),
+            "session_breakdown": dict(sessions),
+            "side_breakdown": dict(sides),
+            "close_reason_breakdown": dict(close_reasons),
+            # V2 protection analytics
+            "protection_activations": sum(1 for s in protection_stages if s > 0),
+            "protection_stage_avg": round(sum(protection_stages) / max(len(protection_stages), 1), 2),
+            "avg_sl_modifications": round(sum(sl_mod_counts) / max(len(sl_mod_counts), 1), 1),
+            # Model traceability
+            "model_version": week_trades[-1].get("model_version", "unknown") if week_trades else "unknown",
+        }
+
+        self.log_weekly_summary(summary)
+        return summary
+
     def _read_jsonl_tail(self, filename: str, limit: int) -> list:
         """Read last N lines from JSONL file (efficient tail)."""
         path = self.log_dir / filename

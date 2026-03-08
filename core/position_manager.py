@@ -32,13 +32,17 @@ class PositionManager:
 
     def update_from_mt5(self):
         """Sync with MT5 positions for recovery on restart.
-        If MT5 has an open XAUUSD position we don't know about, adopt it."""
+        If MT5 has an open XAUUSD position placed by the AI (magic=234000),
+        adopt it.  Ignores user's manual trades."""
         try:
             positions = self.mt5.get_open_positions(self.cfg.mt5_symbol)
-            if positions and not self.position:
-                pos = positions[0]  # Take first XAUUSD position
+            # Only consider positions placed by our system
+            our_positions = [
+                p for p in (positions or []) if p.get('magic', 0) == 234000
+            ]
+            if our_positions and not self.position:
+                pos = our_positions[0]
                 # MT5 bridge returns 'type' as int (0=BUY, 1=SELL)
-                # Convert to "LONG"/"SHORT" strings for consistency
                 pos_type = pos.get('type', 0)
                 side_str = "LONG" if pos_type == 0 else "SHORT"
                 self.position = {
@@ -50,12 +54,12 @@ class PositionManager:
                     'take_profit': pos.get('tp', 0),
                     'conviction': 0.5,  # Unknown for recovered positions
                     'entry_step': 0,
-                    'entry_time': datetime.now(timezone.utc),
+                    'entry_time': pos.get('time', datetime.now(timezone.utc)),
                 }
-                log.warning(f"Recovered position from MT5: {self.position}")
-            elif not positions and self.position:
-                # Position was closed externally (SL/TP hit by broker)
-                log.warning("Position closed externally (SL/TP hit by broker)")
+                log.warning(f"Recovered AI position from MT5: {self.position}")
+            elif not our_positions and self.position:
+                # Our position was closed externally (SL/TP hit by broker)
+                log.warning("AI position closed externally (SL/TP hit by broker)")
                 self.position = None
         except Exception as e:
             log.error(f"Failed to sync with MT5 positions: {e}")
@@ -74,8 +78,10 @@ class PositionManager:
         side = self.position['side']
 
         sym_info = self.mt5.get_symbol_info()
-        tick_value = sym_info.get('tick_value', 1.0)
+        tick_value = sym_info.get('tick_value', 0.745)
         tick_size = sym_info.get('tick_size', 0.01)
+        if tick_size <= 0:
+            tick_size = 0.01
         value_per_point = tick_value / tick_size
 
         if side == "LONG":

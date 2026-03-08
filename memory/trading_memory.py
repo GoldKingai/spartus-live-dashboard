@@ -15,7 +15,7 @@ self-contained for the live dashboard.
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -194,6 +194,14 @@ class TradingMemory:
         c.execute("CREATE INDEX IF NOT EXISTS idx_predictions_step ON predictions(step)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_journal_trade ON journal(trade_id)")
 
+        # --- Migration: add mt5_ticket column if not present ---
+        try:
+            c.execute("SELECT mt5_ticket FROM trades LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE trades ADD COLUMN mt5_ticket INTEGER DEFAULT 0")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_trades_mt5_ticket ON trades(mt5_ticket)")
+            logger.info("Migration: added mt5_ticket column to trades table")
+
         self.conn.commit()
         logger.debug("All 5 tables created / verified.")
 
@@ -209,7 +217,7 @@ class TradingMemory:
             pnl, pnl_pct, hold_bars, close_reason, conviction,
             rsi_at_entry, trend_dir_at_entry, session_at_entry,
             vol_regime_at_entry, entry_conditions (dict or JSON str),
-            paper_trade (bool, optional).
+            paper_trade (bool, optional), mt5_ticket (int, optional).
         """
         d = trade_data
         entry_cond = d.get("entry_conditions", {})
@@ -222,10 +230,11 @@ class TradingMemory:
                 timestamp, week, step, side, entry_price, exit_price, lot_size,
                 pnl, pnl_pct, hold_bars, close_reason, conviction,
                 rsi_at_entry, trend_dir_at_entry, session_at_entry,
-                vol_regime_at_entry, entry_conditions, paper_trade
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                vol_regime_at_entry, entry_conditions, paper_trade,
+                mt5_ticket
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            d.get("timestamp", datetime.utcnow().isoformat()),
+            d.get("timestamp", datetime.now(timezone.utc).isoformat()),
             d.get("week", 0),
             d.get("step", 0),
             d.get("side", "LONG"),
@@ -243,6 +252,7 @@ class TradingMemory:
             d.get("vol_regime_at_entry", 1.0),
             entry_cond,
             int(d.get("paper_trade", False)),
+            d.get("mt5_ticket", 0),
         ))
         trade_id = c.lastrowid
         self._cache_valid = False
@@ -261,6 +271,103 @@ class TradingMemory:
         self.conn.commit()
         logger.debug("Recorded trade id=%d  pnl=%.2f", trade_id, d.get("pnl", 0.0))
         return trade_id
+
+    def has_mt5_ticket(self, ticket: int) -> bool:
+        """Check if a trade with the given MT5 ticket already exists."""
+        if ticket <= 0:
+            return False
+        try:
+            row = self.conn.execute(
+                "SELECT 1 FROM trades WHERE mt5_ticket = ? LIMIT 1",
+                (ticket,),
+            ).fetchone()
+            return row is not None
+        except sqlite3.OperationalError as e:
+            logger.warning("has_mt5_ticket query failed: %s", e)
+            return False
+
+    def get_known_mt5_tickets(self) -> set:
+        """Return the set of all MT5 tickets we've recorded."""
+        try:
+            rows = self.conn.execute(
+                "SELECT mt5_ticket FROM trades WHERE mt5_ticket > 0"
+            ).fetchall()
+            return {r[0] for r in rows}
+        except sqlite3.OperationalError as e:
+            logger.warning("get_known_mt5_tickets query failed: %s", e)
+            return set()
+
+    def has_matching_trade(
+        self,
+        side: str,
+        entry_price: float,
+        exit_price: float,
+        lot_size: float,
+        pnl: float,
+    ) -> bool:
+        """Check if a trade with matching characteristics already exists.
+
+        Used to prevent duplicates when reconciling MT5 history against
+        trades that were recorded before the mt5_ticket column existed.
+        Matches on side + entry_price + exit_price + lot_size + pnl
+        (rounded to 2 decimals for price tolerance).
+        """
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM trades
+            WHERE side = ?
+              AND ROUND(entry_price, 2) = ROUND(?, 2)
+              AND ROUND(exit_price, 2) = ROUND(?, 2)
+              AND ROUND(lot_size, 3) = ROUND(?, 3)
+              AND ROUND(pnl, 1) = ROUND(?, 1)
+            LIMIT 1
+            """,
+            (side, entry_price, exit_price, lot_size, pnl),
+        ).fetchone()
+        return row is not None
+
+    def backfill_mt5_ticket(
+        self,
+        side: str,
+        entry_price: float,
+        exit_price: float,
+        lot_size: float,
+        pnl: float,
+        mt5_ticket: int,
+    ) -> bool:
+        """Set the mt5_ticket on a matching trade that has ticket=0.
+
+        Returns True if a row was updated.
+        """
+        c = self.conn.cursor()
+        # Use subquery to update only the first match (SQLite has no
+        # UPDATE ... LIMIT)
+        c.execute(
+            """
+            UPDATE trades
+            SET mt5_ticket = ?
+            WHERE id = (
+                SELECT id FROM trades
+                WHERE mt5_ticket = 0
+                  AND side = ?
+                  AND ROUND(entry_price, 2) = ROUND(?, 2)
+                  AND ROUND(exit_price, 2) = ROUND(?, 2)
+                  AND ROUND(lot_size, 3) = ROUND(?, 3)
+                  AND ROUND(pnl, 1) = ROUND(?, 1)
+                ORDER BY id LIMIT 1
+            )
+            """,
+            (mt5_ticket, side, entry_price, exit_price, lot_size, pnl),
+        )
+        if c.rowcount > 0:
+            self.conn.commit()
+            logger.info(
+                "Backfilled mt5_ticket=%d on existing trade "
+                "(%s entry=%.2f exit=%.2f)",
+                mt5_ticket, side, entry_price, exit_price,
+            )
+            return True
+        return False
 
     # ==================================================================
     # Pattern Tracking
@@ -356,7 +463,7 @@ class TradingMemory:
             INSERT INTO predictions (timestamp, step, predicted_direction, confidence,
                                      price_at_prediction)
             VALUES (?, ?, ?, ?, ?)
-        """, (datetime.utcnow().isoformat(), step, direction, confidence, price))
+        """, (datetime.now(timezone.utc).isoformat(), step, direction, confidence, price))
         self.conn.commit()
         logger.debug("Prediction recorded at step %d: dir=%.3f conf=%.3f", step, direction, confidence)
 
@@ -647,6 +754,70 @@ class TradingMemory:
             })
         return results
 
+    def get_today_summary(self) -> dict:
+        """Return today's trading summary computed from the database.
+
+        Returns dict with: trades, wins, losses, pnl, win_rate,
+        max_dd, profit_factor.  All values default to 0 if no trades today.
+        """
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        row = self.conn.execute("""
+            SELECT
+                COUNT(*)                                          AS trades,
+                SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)         AS wins,
+                SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)        AS losses,
+                COALESCE(SUM(pnl), 0.0)                           AS net_pnl,
+                COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0.0)
+                                                                  AS gross_profit,
+                COALESCE(SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END), 0.0)
+                                                                  AS gross_loss
+            FROM trades
+            WHERE timestamp LIKE ?
+        """, (f"{today_str}%",)).fetchone()
+
+        trades = row[0] or 0
+        wins = row[1] or 0
+        losses = row[2] or 0
+        net_pnl = row[3] or 0.0
+        gross_profit = row[4] or 0.0
+        gross_loss = row[5] or 0.0
+
+        win_rate = (wins / trades * 100) if trades > 0 else 0.0
+        profit_factor = (
+            gross_profit / gross_loss if gross_loss > 0 else
+            (999.0 if gross_profit > 0 else 0.0)
+        )
+
+        # Max intra-day drawdown: peak-to-trough of cumulative P/L
+        pnls = self.conn.execute("""
+            SELECT pnl FROM trades
+            WHERE timestamp LIKE ?
+            ORDER BY id ASC
+        """, (f"{today_str}%",)).fetchall()
+
+        max_dd = 0.0
+        if pnls:
+            cumulative = 0.0
+            peak = 0.0
+            for (p,) in pnls:
+                cumulative += p
+                if cumulative > peak:
+                    peak = cumulative
+                dd = peak - cumulative
+                if dd > max_dd:
+                    max_dd = dd
+
+        return {
+            "trades": trades,
+            "wins": wins,
+            "losses": losses,
+            "pnl": round(net_pnl, 2),
+            "win_rate": round(win_rate, 1),
+            "max_dd": round(max_dd, 2),
+            "profit_factor": round(profit_factor, 2),
+        }
+
     def get_lesson_summary(self) -> dict:
         """Count of each lesson_type in the journal."""
         rows = self.conn.execute("""
@@ -659,13 +830,16 @@ class TradingMemory:
         """Performance breakdown by trading session.
 
         Returns dict mapping session name to aggregated stats.
+        Win rate is returned as a percentage (0-100), not a fraction.
         """
         rows = self.conn.execute("""
             SELECT session_at_entry,
                    COUNT(*) as cnt,
                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
                    SUM(pnl) as net_pnl,
-                   AVG(pnl) as avg_pnl
+                   AVG(pnl) as avg_pnl,
+                   SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) as gross_profit,
+                   SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END) as gross_loss
             FROM trades
             GROUP BY session_at_entry
         """).fetchall()
@@ -675,11 +849,15 @@ class TradingMemory:
             session = r[0] or "unknown"
             cnt = r[1]
             wins = r[2]
+            gross_profit = r[5] or 0.0
+            gross_loss = r[6] or 0.0
+            pf = gross_profit / gross_loss if gross_loss > 0 else 0.0
             result[session] = {
                 "trades": cnt,
                 "wins": wins,
                 "losses": cnt - wins,
-                "win_rate": wins / cnt if cnt > 0 else 0.0,
+                "win_rate": round(wins / cnt * 100, 1) if cnt > 0 else 0.0,
+                "pf": round(pf, 2),
                 "net_pnl": r[3] or 0.0,
                 "avg_pnl": r[4] or 0.0,
             }

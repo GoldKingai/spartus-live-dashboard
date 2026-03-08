@@ -198,6 +198,7 @@ class LiveFeaturePipeline:
             market_features=config.market_feature_names,
             window=config.norm_window,
             clip=config.norm_clip,
+            mode=config.normalization_mode,
         )
 
         # Frame stacking buffer: 10 most recent 67-dim frames
@@ -411,6 +412,20 @@ class LiveFeaturePipeline:
         # ---- Normalise 38 market features ----
         normed_features = self._normalizer.normalize_batch(raw_features)
 
+        # ---- Auto-reset detection (adaptive mode only) ----
+        if self._normalizer.mode == "adaptive":
+            healthy, reason = self._normalizer.check_distribution_health(
+                z_abs_mean_threshold=self._config.auto_reset_z_abs_mean_threshold,
+                pct_over_4sigma=self._config.auto_reset_pct_features_over_4sigma,
+                cooldown_bars=self._config.auto_reset_cooldown_bars,
+            )
+            if not healthy:
+                log.warning("AUTO-RESET: %s -- resetting normalizer", reason)
+                self._normalizer.on_auto_reset()
+                self.reset_normalizer()
+                # Recompute with fresh normalizer
+                normed_features = self._normalizer.normalize_batch(raw_features)
+
         # Store for diagnostics
         self._latest_features = {**raw_features}  # shallow copy of raw
         self._latest_features["_normalized"] = {
@@ -501,9 +516,14 @@ class LiveFeaturePipeline:
         features.update(time_feats)
 
         # Upgrade 1: Correlated Instruments (11 features)
+        # Filter out empty correlated DataFrames to avoid NaN propagation
+        valid_correlated = {
+            sym: df for sym, df in self._correlated_m5.items()
+            if not df.empty and len(df) >= 20
+        }
         corr_feats = compute_correlation_features(
             xau_m5=m5,
-            correlated_m5=self._correlated_m5,
+            correlated_m5=valid_correlated,
         )
         features.update(corr_feats)
 
@@ -527,10 +547,13 @@ class LiveFeaturePipeline:
         features.update(spread_feats)
 
         # Upgrade 4: Regime Detection (2 features)
+        # Only pass correlated data if we have enough bars for the 100-bar window
+        eurusd_df = self._correlated_m5.get("EURUSD")
+        us500_df = self._correlated_m5.get("US500")
         regime_feats = compute_regime_features(
             xau_m5=m5,
-            eurusd_m5=self._correlated_m5.get("EURUSD"),
-            us500_m5=self._correlated_m5.get("US500"),
+            eurusd_m5=eurusd_df if eurusd_df is not None and len(eurusd_df) >= 100 else None,
+            us500_m5=us500_df if us500_df is not None and len(us500_df) >= 100 else None,
             regime_corr_window=100,
         )
         features.update(regime_feats)
@@ -979,6 +1002,21 @@ class LiveFeaturePipeline:
     # Normalizer persistence (convenience wrappers)
     # ------------------------------------------------------------------
 
+    def set_feature_baseline(self, baseline: Dict[str, Dict[str, float]]) -> None:
+        """Load training feature baseline into the normalizer.
+
+        Must be called before first tick in frozen mode.
+
+        Args:
+            baseline: Dict from feature_baseline.json in model package.
+                Keys are feature names, values have "mean" and "std".
+        """
+        self._normalizer.set_baseline(baseline)
+        log.info(
+            "Feature baseline loaded into normalizer (mode=%s)",
+            self._normalizer.mode,
+        )
+
     def save_normalizer_state(self) -> None:
         """Save the normaliser state to the configured path."""
         path = self._resolve_path(self._config.normalizer_state_path)
@@ -992,6 +1030,63 @@ class LiveFeaturePipeline:
         """
         path = self._resolve_path(self._config.normalizer_state_path)
         return self._normalizer.load_state(str(path))
+
+    def reset_normalizer(self, mt5_bridge=None) -> None:
+        """Reset the normalizer and optionally re-warm from live data.
+
+        Clears all rolling buffers, deletes the saved state file, and
+        optionally re-warms from the current M5 buffer (if mt5_bridge
+        is not needed because we already have bars in self._m5).
+
+        This is the "un-stuck" button for conviction collapse caused
+        by normalizer contamination after violent market moves.
+
+        Args:
+            mt5_bridge: If provided, fetches fresh M5 data and re-warms.
+                If None, re-warms from the existing M5 buffer.
+        """
+        # 1. Reset normalizer buffers
+        self._normalizer.reset()
+
+        # 2. Delete saved state file
+        state_path = self._resolve_path(self._config.normalizer_state_path)
+        if state_path.exists():
+            state_path.unlink()
+            log.info("Deleted normalizer state file: %s", state_path)
+
+        # 3. Clear frame buffer (old frames have contaminated z-scores)
+        self._frame_buffer.clear()
+
+        # 4. Re-warm from existing M5 buffer if we have data
+        if len(self._m5) >= self._config.norm_window:
+            warmup_count = self._config.norm_window + self._config.frame_stack
+            warmup_count = min(warmup_count, len(self._m5))
+            start_idx = len(self._m5) - warmup_count
+
+            log.info(
+                "Re-warming normalizer from %d existing M5 bars...",
+                warmup_count,
+            )
+            for i in range(start_idx, len(self._m5)):
+                m5_slice = self._m5.iloc[: i + 1].copy()
+                raw_features = self._compute_precomputed_features_from(m5_slice)
+                normed = self._normalizer.normalize_batch(raw_features)
+
+                account_feats = np.zeros(8, dtype=np.float32)
+                account_feats[5] = 1.0  # equity_ratio = 1.0
+                memory_feats = np.full(5, 0.5, dtype=np.float32)
+                frame = self._build_frame(normed, account_feats, memory_feats)
+                self._frame_buffer.append(frame)
+
+            log.info("Normalizer re-warm complete (%d frames in buffer)", len(self._frame_buffer))
+        else:
+            log.warning(
+                "Not enough M5 data for re-warm (%d bars, need %d). "
+                "Normalizer will produce 0.0 z-scores until %d bars accumulated.",
+                len(self._m5),
+                self._config.norm_window,
+                self.min_periods if hasattr(self, 'min_periods') else 50,
+            )
 
     # ------------------------------------------------------------------
     # Helpers
