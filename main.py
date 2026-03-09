@@ -107,6 +107,30 @@ _DASHBOARD_UPDATE_INTERVAL_MS = 1000  # Refresh dashboard UI every 1 second
 _NORMALIZER_SAVE_INTERVAL_S = 3600    # Save normalizer state every hour
 
 
+# ---------------------------------------------------------------------------
+# Thread-safe signal bridge for AutoUpdater callbacks
+# ---------------------------------------------------------------------------
+# QTimer.singleShot(0, cb) does NOT work from background threads in PyQt6
+# because the timer is created in the background thread's context (no event
+# loop).  Using a QObject with queued signals ensures the slots execute on
+# the main thread.
+
+from PyQt6.QtCore import QObject, pyqtSignal as _Signal
+
+
+class _UpdateBridge(QObject):
+    """Emits signals from the AutoUpdater background thread.
+
+    All connections default to Qt.AutoConnection, which becomes
+    QueuedConnection when emitter and receiver live on different threads.
+    """
+    sig_update_available = _Signal(object)   # UpdateInfo
+    sig_no_update        = _Signal()
+    sig_check_failed     = _Signal()
+    sig_progress         = _Signal(str)
+    sig_complete         = _Signal(bool, str)
+
+
 # ===========================================================================
 # SpartusOrchestrator -- Main entry point and trading loop
 # ===========================================================================
@@ -177,6 +201,7 @@ class SpartusOrchestrator:
 
         # ---- Auto-update ----
         self._updater: Optional[AutoUpdater] = None
+        self._update_bridge: Optional[_UpdateBridge] = None
         self._update_bar: Optional[UpdateNotificationBar] = None
         self._update_dialog: Optional[UpdateDialog] = None
 
@@ -629,18 +654,34 @@ class SpartusOrchestrator:
     # ==================================================================
 
     def _ensure_updater(self) -> None:
-        """Create the AutoUpdater instance if it doesn't exist yet."""
+        """Create the AutoUpdater + signal bridge if they don't exist yet.
+
+        The bridge is a QObject whose signals are emitted from the
+        AutoUpdater background thread and delivered to the main thread
+        via Qt's queued-connection mechanism (thread-safe, unlike
+        QTimer.singleShot which silently fails from non-Qt threads).
+        """
         if self._updater is not None:
             return
+
+        # Create the signal bridge (lives on the main thread)
+        bridge = _UpdateBridge()
+        bridge.sig_update_available.connect(self._show_update_notification)
+        bridge.sig_no_update.connect(self._no_update_ui)
+        bridge.sig_check_failed.connect(self._check_failed_ui)
+        bridge.sig_progress.connect(self._update_progress_ui)
+        bridge.sig_complete.connect(self._update_complete_ui)
+        self._update_bridge = bridge
+
         self._updater = AutoUpdater(
             repo_owner="GoldKingai",
             repo_name="spartus-live-dashboard",
             dashboard_root=BASE_DIR,
-            on_update_available=self._on_update_available,
-            on_update_progress=self._on_update_progress,
-            on_update_complete=self._on_update_complete,
-            on_no_update=self._on_no_update,
-            on_check_failed=self._on_check_failed,
+            on_update_available=lambda info: bridge.sig_update_available.emit(info),
+            on_update_progress=lambda msg: bridge.sig_progress.emit(msg),
+            on_update_complete=lambda ok, msg: bridge.sig_complete.emit(ok, msg),
+            on_no_update=lambda: bridge.sig_no_update.emit(),
+            on_check_failed=lambda: bridge.sig_check_failed.emit(),
         )
 
     def _check_for_updates(self) -> None:
@@ -658,31 +699,17 @@ class SpartusOrchestrator:
         log.info("Manual update check requested")
         self._updater.check_for_updates(blocking=False)
 
-    def _on_no_update(self) -> None:
-        """Called from background thread when already on the latest version."""
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, self._no_update_ui)
+    # --- UI slots (always called on main thread via bridge signals) --------
 
     def _no_update_ui(self) -> None:
         """Update the Updates tab to show 'no update available'."""
         if hasattr(self, "_tab_updates") and self._tab_updates:
             self._tab_updates.set_no_update()
 
-    def _on_check_failed(self) -> None:
-        """Called from background thread when the update check fails."""
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, self._check_failed_ui)
-
     def _check_failed_ui(self) -> None:
         """Update the Updates tab to show 'check failed'."""
         if hasattr(self, "_tab_updates") and self._tab_updates:
             self._tab_updates.set_check_failed()
-
-    def _on_update_available(self, update_info) -> None:
-        """Called from background thread when a newer version is found."""
-        # Schedule UI work on the main thread via QTimer.singleShot
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, lambda: self._show_update_notification(update_info))
 
     def _show_update_notification(self, update_info) -> None:
         """Show update notification bar and populate Updates tab."""
@@ -727,22 +754,12 @@ class SpartusOrchestrator:
         t = threading.Thread(target=self._updater.apply_update, daemon=True)
         t.start()
 
-    def _on_update_progress(self, message: str) -> None:
-        """Progress callback from updater (may be called from background thread)."""
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, lambda: self._update_progress_ui(message))
-
     def _update_progress_ui(self, message: str) -> None:
         """Update progress in the dialog and Updates tab (main thread)."""
         if hasattr(self, "_update_dialog") and self._update_dialog:
             self._update_dialog.set_progress(message)
         if hasattr(self, "_tab_updates") and self._tab_updates:
             self._tab_updates.set_progress(message)
-
-    def _on_update_complete(self, success: bool, message: str) -> None:
-        """Completion callback from updater (may be called from background thread)."""
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, lambda: self._update_complete_ui(success, message))
 
     def _update_complete_ui(self, success: bool, message: str) -> None:
         """Show update result in the dialog and Updates tab (main thread)."""
