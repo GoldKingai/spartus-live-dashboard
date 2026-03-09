@@ -124,6 +124,7 @@ class LiveRiskManager:
         side: str = "BUY",
         entry_price: float = 0.0,
         mt5_calc_profit=None,
+        sl_conviction: float = None,
     ) -> float:
         """Calculate position size based on conviction and risk budget.
 
@@ -175,12 +176,20 @@ class LiveRiskManager:
         else:
             dd_mult = 1.0
 
+        # FIX-10: Direction-scaled conviction for SL distance (matches training)
+        if sl_conviction is None:
+            sl_conviction = conviction
+        if dd > 0.08:
+            sl_conviction = min(sl_conviction, 0.30)
+        elif dd > 0.05:
+            sl_conviction = min(sl_conviction, 0.60)
+
         # Risk budget
         risk_amount = balance * self.cfg.max_risk_pct * conviction * dd_mult
 
-        # SL distance in price points (matches training: max(2.5 - conv, min_sl_atr))
+        # SL distance in price points — uses direction-scaled conviction (FIX-10)
         min_sl = getattr(self.cfg, "min_sl_atr", 1.0)
-        sl_atr_mult = max(2.5 - conviction, min_sl)
+        sl_atr_mult = max(2.5 - sl_conviction, min_sl)
         sl_distance = sl_atr_mult * atr
 
         # --- Compute value_per_point using MT5 API when available ---

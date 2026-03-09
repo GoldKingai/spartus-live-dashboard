@@ -538,6 +538,11 @@ class TradeExecutor:
         if abs(direction) < self._config.direction_threshold:
             return "HOLD_FLAT"
 
+        # 1b. Combined signal gate (matches training FIX-3)
+        combined_signal = abs(direction) * conviction
+        if combined_signal < 0.15:
+            return "HOLD_FLAT"
+
         # Determine side
         side = "LONG" if direction > 0 else "SHORT"
         mt5_side = "BUY" if side == "LONG" else "SELL"
@@ -558,6 +563,10 @@ class TradeExecutor:
             return f"BLOCKED_{reason}"
 
         # 3. Lot sizing (using MT5-exact profit calculator)
+        # FIX-10: Direction-scaled conviction for SL distance (matches training)
+        direction_strength = abs(direction)
+        sl_conviction = direction_strength * conviction
+
         atr = self._current_atr
         current_price = bar.get("close", 0.0)
         symbol_info = self._bridge.get_symbol_info(self._config.mt5_symbol)
@@ -592,14 +601,15 @@ class TradeExecutor:
             side=mt5_side,
             entry_price=current_price,
             mt5_calc_profit=_mt5_calc,
+            sl_conviction=sl_conviction,
         )
 
         if lots <= 0:
             log.debug("Lot size is zero (risk budget exhausted)")
             return "LOTS_ZERO"
 
-        # 4. SL / TP
-        sl_price = self._risk.calculate_sl(side, current_price, atr, conviction)
+        # 4. SL / TP — SL uses direction-scaled conviction (FIX-10), TP uses raw conviction
+        sl_price = self._risk.calculate_sl(side, current_price, atr, sl_conviction)
         tp_price = self._risk.calculate_tp(side, current_price, atr, conviction)
 
         # 4a. Enforce broker minimum SL distance

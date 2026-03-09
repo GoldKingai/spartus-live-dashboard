@@ -112,7 +112,7 @@ class LiveConfig:
     direction_threshold: float = 0.3
     min_conviction: float = 0.30          # Raised from 0.15 based on Week 1 data (conv<0.3 = net negative)
     elevated_conviction_threshold: float = 0.6  # Required after soft cap reached
-    exit_threshold: float = 0.5
+    exit_threshold: float = 0.6           # Matched to training (was 0.5, caused early exits)
     allow_min_lot_override: bool = False  # Disabled: min-lot must still pass hard risk cap
 
     # ---- Profit Protection (rule-based staged SL) -------------------------
@@ -176,7 +176,7 @@ class LiveConfig:
     # ---- Post-rounding risk cap (always on) --------------------------------
     enable_post_rounding_risk_cap: bool = True
     post_rounding_risk_cap: float = 1.5
-    absolute_risk_cap_pct: float = 0.03
+    absolute_risk_cap_pct: float = 0.10  # Raised from 0.03: allows min-lot at £100 (training has no cap; 10% covers ATR 3-6)
 
     # ---- Broker constraints / spread gate -----------------------------------
     spread_hard_max_points: int = 50       # Block entry if spread > N points
