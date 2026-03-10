@@ -3,11 +3,12 @@
 :: Spartus Live Trading Dashboard -- One-Click Installer
 :: ============================================================
 :: This script:
-::   1. Checks for Python 3.10+
+::   1. Checks for Python 3.10-3.12 (3.13+ has torch DLL issues)
 ::   2. Creates a virtual environment
-::   3. Installs all dependencies
-::   4. Creates required directories
-::   5. Verifies the installation
+::   3. Installs PyTorch CPU (must come BEFORE other deps)
+::   4. Installs all remaining dependencies
+::   5. Creates required directories
+::   6. Verifies the installation
 :: ============================================================
 
 title Spartus Installer
@@ -21,58 +22,100 @@ echo.
 :: Navigate to this script's directory (works from any location)
 cd /d "%~dp0"
 
-:: ---- Step 1: Find Python ----
-echo [1/5] Checking for Python...
+:: ---- Step 1: Find Python 3.10-3.12 ----
+echo [1/6] Checking for Python 3.10-3.12...
+echo.
 
 set "PYTHON="
 
-:: Check common Python locations
-where python >nul 2>&1
+:: Try specific versions first (most reliable)
+where py >nul 2>&1
 if %errorlevel%==0 (
-    set "PYTHON=python"
-) else (
-    where python3 >nul 2>&1
+    :: py launcher -- try 3.12, 3.11, 3.10 in order
+    py -3.12 -c "pass" >nul 2>&1
     if %errorlevel%==0 (
-        set "PYTHON=python3"
+        set "PYTHON=py -3.12"
+        echo        Found Python 3.12 via py launcher
+        goto :python_found
+    )
+    py -3.11 -c "pass" >nul 2>&1
+    if %errorlevel%==0 (
+        set "PYTHON=py -3.11"
+        echo        Found Python 3.11 via py launcher
+        goto :python_found
+    )
+    py -3.10 -c "pass" >nul 2>&1
+    if %errorlevel%==0 (
+        set "PYTHON=py -3.10"
+        echo        Found Python 3.10 via py launcher
+        goto :python_found
     )
 )
 
-if "%PYTHON%"=="" (
+:: Fallback: check system python
+where python >nul 2>&1
+if %errorlevel%==0 (
+    :: Check it's 3.10-3.12
+    python -c "import sys; exit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" >nul 2>&1
+    if %errorlevel%==0 (
+        set "PYTHON=python"
+        goto :python_found
+    )
+    :: Wrong version -- show what they have
     echo.
-    echo [ERROR] Python is not installed or not in your PATH.
+    echo [ERROR] System Python found but wrong version:
+    python --version
     echo.
-    echo Please install Python 3.10 or higher from:
-    echo   https://www.python.org/downloads/
+    echo Spartus requires Python 3.10, 3.11, or 3.12.
+    echo Python 3.13+ is NOT supported (PyTorch DLL compatibility issues).
     echo.
-    echo IMPORTANT: During installation, check the box that says
-    echo   "Add Python to PATH"
+    echo Please install Python 3.12 from:
+    echo   https://www.python.org/downloads/release/python-3129/
+    echo.
+    echo IMPORTANT: Check "Add Python to PATH" during installation.
     echo.
     pause
     exit /b 1
 )
 
-:: Check Python version (must be 3.10+)
-%PYTHON% -c "import sys; exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] Python 3.10 or higher is required.
-    echo.
-    %PYTHON% --version
-    echo.
-    echo Please install Python 3.10+ from https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
+echo.
+echo [ERROR] Python is not installed or not in your PATH.
+echo.
+echo Please install Python 3.12 from:
+echo   https://www.python.org/downloads/release/python-3129/
+echo.
+echo IMPORTANT: During installation, check the box that says
+echo   "Add Python to PATH"
+echo.
+echo NOTE: Python 3.13+ is NOT supported due to PyTorch issues.
+echo.
+pause
+exit /b 1
 
-for /f "tokens=*" %%i in ('%PYTHON% --version') do echo        Found: %%i
+:python_found
+for /f "tokens=*" %%i in ('%PYTHON% --version') do echo        Version: %%i
 echo        [OK]
 echo.
 
 :: ---- Step 2: Create virtual environment ----
-echo [2/5] Creating virtual environment...
+echo [2/6] Creating virtual environment...
 
 if exist "venv\Scripts\python.exe" (
-    echo        Already exists -- skipping.
+    :: Check existing venv Python version is 3.10-3.12
+    venv\Scripts\python.exe -c "import sys; exit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo        Existing venv has incompatible Python -- recreating...
+        rmdir /s /q venv >nul 2>&1
+        %PYTHON% -m venv venv
+        if %errorlevel% neq 0 (
+            echo [ERROR] Failed to create virtual environment.
+            pause
+            exit /b 1
+        )
+        echo        [OK] Recreated venv/
+    ) else (
+        echo        Already exists with compatible Python -- skipping.
+    )
 ) else (
     %PYTHON% -m venv venv
     if %errorlevel% neq 0 (
@@ -88,11 +131,44 @@ echo.
 set "PYTHON=venv\Scripts\python.exe"
 set "PIP=venv\Scripts\pip.exe"
 
-:: ---- Step 3: Install dependencies ----
-echo [3/5] Installing dependencies (this may take a few minutes)...
+:: ---- Step 3: Install PyTorch CPU ----
+echo [3/6] Installing PyTorch (CPU version)...
+echo        This is ~200 MB and may take a few minutes.
 echo.
 
+:: Check if torch is already installed and working
+%PYTHON% -c "import torch; print(f'torch {torch.__version__} already installed')" >nul 2>&1
+if %errorlevel%==0 (
+    :: Verify it actually loads (catches the c10.dll crash)
+    %PYTHON% -c "import torch; torch.zeros(1)" >nul 2>&1
+    if %errorlevel%==0 (
+        for /f "tokens=*" %%i in ('%PYTHON% -c "import torch; print(f'torch {torch.__version__}')"') do echo        %%i -- working
+        echo        [OK] Skipping reinstall.
+        goto :torch_done
+    ) else (
+        echo        Existing torch installation is broken -- reinstalling...
+        %PIP% uninstall torch -y >nul 2>&1
+    )
+)
+
 %PIP% install --upgrade pip >nul 2>&1
+%PIP% install torch --index-url https://download.pytorch.org/whl/cpu
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] PyTorch installation failed.
+    echo        Check your internet connection and try again.
+    pause
+    exit /b 1
+)
+echo        [OK]
+
+:torch_done
+echo.
+
+:: ---- Step 4: Install remaining dependencies ----
+echo [4/6] Installing remaining dependencies...
+echo.
+
 %PIP% install -r requirements.txt
 if %errorlevel% neq 0 (
     echo.
@@ -103,9 +179,10 @@ if %errorlevel% neq 0 (
 )
 echo.
 
-:: ---- Step 4: Create directories ----
-echo [4/5] Creating directory structure...
+:: ---- Step 5: Create directories ----
+echo [5/6] Creating directory structure...
 
+if not exist "model" mkdir "model"
 if not exist "storage\logs" mkdir "storage\logs"
 if not exist "storage\memory" mkdir "storage\memory"
 if not exist "storage\models" mkdir "storage\models"
@@ -113,17 +190,22 @@ if not exist "storage\state" mkdir "storage\state"
 if not exist "storage\screenshots" mkdir "storage\screenshots"
 if not exist "storage\reports\weekly" mkdir "storage\reports\weekly"
 
-echo        [OK] storage/ directories ready.
+echo        [OK] All directories ready.
 echo.
 
-:: ---- Step 5: Verify installation ----
-echo [5/5] Verifying installation...
+:: ---- Step 6: Verify installation ----
+echo [6/6] Verifying installation...
 
 set "VERIFY_OK=1"
+set "WARN_COUNT=0"
 
-%PYTHON% -c "import MetaTrader5" >nul 2>&1
+:: Critical packages
+%PYTHON% -c "import torch; torch.zeros(1)" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo        [WARN] MetaTrader5 package not available -- install requires MT5 terminal.
+    echo        [FAIL] PyTorch -- cannot load (DLL error?)
+    set "VERIFY_OK=0"
+) else (
+    for /f "tokens=*" %%i in ('%PYTHON% -c "import torch; print(torch.__version__)"') do echo        [OK] PyTorch %%i
 )
 
 %PYTHON% -c "import PyQt6" >nul 2>&1
@@ -174,6 +256,15 @@ if %errorlevel% neq 0 (
     echo        [OK] PyYAML
 )
 
+:: Optional packages
+%PYTHON% -c "import MetaTrader5" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo        [WARN] MetaTrader5 -- requires MT5 terminal to be installed.
+    set /a WARN_COUNT+=1
+) else (
+    echo        [OK] MetaTrader5
+)
+
 echo.
 
 if "%VERIFY_OK%"=="0" (
@@ -190,9 +281,11 @@ echo   INSTALLATION COMPLETE
 echo ============================================================
 echo.
 echo Next steps:
-echo   1. Place your trained model .zip in storage\models\
+echo   1. Place your trained model .zip in the model\ folder
 echo   2. Make sure MetaTrader 5 is running and logged in
-echo   3. Double-click launch.bat to start the dashboard
+echo   3. In MT5, right-click Market Watch and click "Show All"
+echo      (XAUUSD must be visible for the dashboard to work)
+echo   4. Double-click launch.bat to start the dashboard
 echo.
 echo Configuration: config\default_config.yaml
 echo Logs:          storage\logs\dashboard.log

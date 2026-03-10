@@ -30,30 +30,73 @@ if exist "..\venv\Scripts\python.exe" (
         set "PYTHON=python"
         echo [OK] Using system Python
     ) else (
-        echo [ERROR] Python not found. Install Python 3.11+ or activate a virtualenv.
+        echo [ERROR] Python not found. Run install.bat first, or install Python 3.11+
         pause
         exit /b 1
     )
 )
 
+:: ---- Validate Python version (3.10-3.12) ----
+%PYTHON% -c "import sys; v=sys.version_info; exit(0 if (3,10)<=v[:2]<=(3,12) else 1)" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Python version not supported.
+    %PYTHON% --version
+    echo.
+    echo Spartus requires Python 3.10, 3.11, or 3.12.
+    echo Python 3.13+ causes PyTorch DLL crashes on Windows.
+    echo.
+    echo Fix: Run install.bat to create a venv with the right Python,
+    echo      or install Python 3.12 from python.org
+    echo.
+    pause
+    exit /b 1
+)
+
 :: ---- Check dependencies ----
 echo.
 echo Checking dependencies...
+
+:: Check torch loads without DLL crash
+%PYTHON% -c "import torch; torch.zeros(1)" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] PyTorch failed to load. This usually means:
+    echo   - CUDA version installed on CPU-only machine
+    echo   - Python version incompatible with installed torch
+    echo.
+    echo Fix: Run install.bat to reinstall, or manually:
+    echo   venv\Scripts\pip uninstall torch
+    echo   venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cpu
+    echo.
+    pause
+    exit /b 1
+)
+
 %PYTHON% -c "import MetaTrader5" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARN] MetaTrader5 not installed. Run: pip install MetaTrader5
 )
 %PYTHON% -c "import PyQt6" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] PyQt6 not installed. Run: pip install -r requirements.txt
+    echo [ERROR] PyQt6 not installed. Run install.bat first.
     pause
     exit /b 1
 )
 %PYTHON% -c "import stable_baselines3" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] stable-baselines3 not installed. Run: pip install -r requirements.txt
+    echo [ERROR] stable-baselines3 not installed. Run install.bat first.
     pause
     exit /b 1
+)
+
+:: ---- Check for model ----
+if not exist "model\*.zip" (
+    echo.
+    echo [WARN] No model file found in model\ folder.
+    echo        Place your spartus_live_*.zip model file in the model\ folder.
+    echo        The dashboard will launch in limited mode without a model.
+    echo.
 )
 
 :: ---- Create storage directories ----
