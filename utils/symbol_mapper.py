@@ -41,12 +41,28 @@ SYMBOL_MAP_DEFAULT: Dict[str, str] = {
 # Alternative names brokers commonly use for each instrument
 # ------------------------------------------------------------------
 BROKER_ALTERNATIVES: Dict[str, List[str]] = {
-    "US500": ["SP500", "SPX500", "USA500", "USA500IDXUSD", "SP500m", "US500.cash"],
-    "USOIL": ["WTI", "CL-OIL", "USOUSD", "LIGHTCMDUSD", "XTIUSD", "OIL.WTI"],
-    "XAUUSD": ["GOLD"],
-    "EURUSD": [],
-    "XAGUSD": ["SILVER"],
-    "USDJPY": [],
+    "US500": [
+        "SP500", "SPX500", "USA500", "USA500IDXUSD", "SP500m", "US500.cash",
+        "US500Cash", "SPX", "SPX500USD", "S&P500", "SandP500",
+        "US500USD", "US_500", ".US500", "US500_Cash",
+    ],
+    "USOIL": [
+        "WTI", "CL-OIL", "USOUSD", "LIGHTCMDUSD", "XTIUSD", "OIL.WTI",
+        "CRUDEOIL", "UKOIL", "WTIUSD", "OILUSD", "USOILUSD",
+    ],
+    "XAUUSD": ["GOLD", "GOLDUSD"],
+    "EURUSD": ["EURUSDx"],
+    "XAGUSD": ["SILVER", "SILVERUSD", "XAGUSDX"],
+    "USDJPY": ["USDJPYx"],
+}
+
+# ------------------------------------------------------------------
+# Fuzzy-match keywords used as a last resort when all else fails.
+# Maps canonical names to search terms for scanning available symbols.
+# ------------------------------------------------------------------
+_FUZZY_KEYWORDS: Dict[str, List[str]] = {
+    "US500": ["500", "SPX", "S&P"],
+    "USOIL": ["OIL", "WTI", "XTI", "CRUDE", "CL-"],
 }
 
 # ------------------------------------------------------------------
@@ -140,6 +156,23 @@ def resolve_symbol(
         if suffixed:
             log.info("Symbol %s resolved via alternative+suffix: %s", canonical, suffixed)
             return suffixed
+
+    # 6. Fuzzy keyword search (last resort)
+    keywords = _FUZZY_KEYWORDS.get(canonical)
+    if keywords:
+        candidates = []
+        for sym in available_symbols:
+            sym_upper = sym.upper()
+            if any(kw.upper() in sym_upper for kw in keywords):
+                candidates.append(sym)
+        if len(candidates) == 1:
+            log.info("Symbol %s resolved via fuzzy match: %s", canonical, candidates[0])
+            return candidates[0]
+        elif candidates:
+            log.info(
+                "Symbol %s: multiple fuzzy matches found: %s — add the correct one to config.symbol_map",
+                canonical, ", ".join(sorted(candidates)[:10]),
+            )
 
     return None
 

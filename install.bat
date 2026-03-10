@@ -5,10 +5,11 @@
 :: This script sets up EVERYTHING from scratch:
 ::   1. Downloads Python 3.11 embeddable package (if no Python found)
 ::   2. Bootstraps pip into the embedded Python
-::   3. Installs PyTorch CPU
-::   4. Installs all remaining dependencies
-::   5. Creates required directories
-::   6. Verifies the installation
+::   3. Installs Visual C++ Runtime (required by PyTorch)
+::   4. Installs PyTorch CPU
+::   5. Installs all remaining dependencies
+::   6. Creates required directories
+::   7. Verifies the installation
 ::
 :: The user does NOT need Python installed on their system.
 :: ============================================================
@@ -27,7 +28,7 @@ cd /d "%~dp0"
 :: ============================================================
 :: Step 1: Find or download Python
 :: ============================================================
-echo [1/6] Setting up Python...
+echo [1/7] Setting up Python...
 echo.
 
 :: --- Check if we already have an embedded Python ---
@@ -207,15 +208,49 @@ echo.
 :: ============================================================
 :: Step 2: Upgrade pip
 :: ============================================================
-echo [2/6] Upgrading pip...
+echo [2/7] Upgrading pip...
 %PYTHON% -m pip install --upgrade pip --no-warn-script-location >nul 2>&1
 echo        [OK]
 echo.
 
 :: ============================================================
-:: Step 3: Install PyTorch CPU
+:: Step 3: Install Visual C++ Runtime (required by PyTorch)
 :: ============================================================
-echo [3/6] Installing PyTorch (CPU version)...
+echo [3/7] Checking Visual C++ Runtime...
+
+:: Check if VC++ runtime is present by looking for vcruntime140.dll
+:: PyTorch's c10.dll depends on this
+if exist "%SystemRoot%\System32\vcruntime140_1.dll" (
+    echo        [OK] Visual C++ Runtime already installed.
+) else (
+    echo        Visual C++ Runtime not found -- installing...
+    echo        Downloading VC++ Redistributable...
+    set "VCREDIST_URL=https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    powershell -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%VCREDIST_URL%' -OutFile 'vc_redist.x64.exe' -UseBasicParsing }" 2>nul
+    if not exist "vc_redist.x64.exe" (
+        curl -L -o "vc_redist.x64.exe" "%VCREDIST_URL%" 2>nul
+    )
+    if exist "vc_redist.x64.exe" (
+        echo        Installing VC++ Redistributable (may require admin)...
+        vc_redist.x64.exe /install /quiet /norestart
+        if %errorlevel% neq 0 (
+            echo        [WARN] Auto-install failed. Trying with UI...
+            vc_redist.x64.exe /install /passive /norestart
+        )
+        del "vc_redist.x64.exe" 2>nul
+        echo        [OK] Visual C++ Runtime installed.
+    ) else (
+        echo        [WARN] Could not download VC++ Runtime.
+        echo        If PyTorch fails later, install it manually from:
+        echo        https://aka.ms/vs/17/release/vc_redist.x64.exe
+    )
+)
+echo.
+
+:: ============================================================
+:: Step 4: Install PyTorch CPU
+:: ============================================================
+echo [4/7] Installing PyTorch (CPU version)...
 echo        This is ~200 MB and may take a few minutes.
 echo.
 
@@ -244,9 +279,9 @@ echo        [OK]
 echo.
 
 :: ============================================================
-:: Step 4: Install remaining dependencies
+:: Step 5: Install remaining dependencies
 :: ============================================================
-echo [4/6] Installing remaining dependencies...
+echo [5/7] Installing remaining dependencies...
 echo.
 
 %PYTHON% -m pip install -r requirements.txt --no-warn-script-location
@@ -260,9 +295,9 @@ if %errorlevel% neq 0 (
 echo.
 
 :: ============================================================
-:: Step 5: Create directories
+:: Step 6: Create directories
 :: ============================================================
-echo [5/6] Creating directory structure...
+echo [6/7] Creating directory structure...
 
 if not exist "model" mkdir "model"
 if not exist "storage\logs" mkdir "storage\logs"
@@ -276,9 +311,9 @@ echo        [OK] All directories ready.
 echo.
 
 :: ============================================================
-:: Step 6: Verify installation
+:: Step 7: Verify installation
 :: ============================================================
-echo [6/6] Verifying installation...
+echo [7/7] Verifying installation...
 
 set "VERIFY_OK=1"
 
