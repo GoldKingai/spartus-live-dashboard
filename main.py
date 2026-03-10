@@ -727,18 +727,16 @@ class SpartusOrchestrator:
         if hasattr(self, "_tab_updates") and self._tab_updates:
             self._tab_updates.set_update_available(update_info)
 
-        # Add notification bar to the dashboard
+        # Add notification bar as an overlay at the top of the window
+        # (does not affect the layout of dashboard content)
         if self._dashboard:
-            central = self._dashboard.centralWidget()
-            if central and central.layout():
-                self._update_bar = UpdateNotificationBar(
-                    update_info.latest_version, self._dashboard
-                )
-                self._update_bar.clicked.connect(
-                    lambda: self._show_update_dialog(update_info)
-                )
-                # Insert at top (position 0, before header)
-                central.layout().insertWidget(0, self._update_bar)
+            self._update_bar = UpdateNotificationBar(
+                update_info.latest_version, self._dashboard
+            )
+            self._update_bar.clicked.connect(
+                lambda: self._show_update_dialog(update_info)
+            )
+            self._update_bar.showOverlay()
 
     def _show_update_dialog(self, update_info) -> None:
         """Show the full update dialog."""
@@ -746,7 +744,10 @@ class SpartusOrchestrator:
         dialog.update_requested.connect(self._apply_update)
         dialog.restart_requested.connect(self._restart_dashboard)
         self._update_dialog = dialog
-        dialog.exec()
+        result = dialog.exec()
+        # If user clicked Skip or Remind Me Later (rejected), dismiss the bar
+        if result == 0 and self._update_bar:
+            self._update_bar.dismiss()
 
     def _apply_update(self) -> None:
         """User confirmed update — run in background thread."""

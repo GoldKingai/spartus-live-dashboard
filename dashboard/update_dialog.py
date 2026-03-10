@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QProgressBar, QCheckBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtGui import QFont
 
 
@@ -167,22 +167,56 @@ class UpdateDialog(QDialog):
 class UpdateNotificationBar(QLabel):
     """Small notification bar that sits at the top of the main window.
 
-    Shows "Update available: v1.2.0 — Click to update" with a dismiss button.
+    Shows "Update available: v1.2.0 — Click to update" with an X dismiss button.
+    Overlay-style: uses absolute positioning so it doesn't affect the layout.
     """
 
     clicked = pyqtSignal()
+    dismissed = pyqtSignal()
 
     def __init__(self, version: str, parent=None):
         super().__init__(parent)
         self.setText(
             f"  Update available: <b>v{version}</b> &nbsp;&mdash;&nbsp; "
             f"<a style='color:#00b894;' href='#'>Click to update</a>"
+            f"&nbsp;&nbsp;&nbsp;"
+            f"<a style='color:#b2bec3; text-decoration:none; font-size:14px;' href='dismiss'>&times;</a>"
         )
         self.setStyleSheet(
             "background-color: #0f3460; color: #e0e0e0; padding: 6px 12px; "
             "border-bottom: 2px solid #00b894; font-size: 11px;"
         )
         self.setOpenExternalLinks(False)
-        self.linkActivated.connect(lambda: self.clicked.emit())
+        self.linkActivated.connect(self._on_link)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(32)
+
+    def _on_link(self, url: str) -> None:
+        if url == "dismiss":
+            self.dismiss()
+        else:
+            self.clicked.emit()
+
+    def dismiss(self) -> None:
+        """Hide and remove the notification bar."""
+        self.setVisible(False)
+        self.dismissed.emit()
+        # Remove event filter
+        if self.parent():
+            self.parent().removeEventFilter(self)
+        self.deleteLater()
+
+    def showOverlay(self) -> None:
+        """Position as overlay and install resize tracking."""
+        parent = self.parent()
+        if parent:
+            self.setGeometry(0, 0, parent.width(), 32)
+            parent.installEventFilter(self)
+            self.raise_()
+            self.show()
+
+    def eventFilter(self, obj, event):
+        """Track parent resize to keep bar full-width."""
+        if event.type() == QEvent.Type.Resize and obj is self.parent():
+            self.setGeometry(0, 0, obj.width(), 32)
+        return False
