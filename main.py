@@ -104,6 +104,7 @@ from dashboard.tab_trade_journal import TradeJournalTab
 from dashboard.tab_model_state import ModelStateTab
 from dashboard.tab_alerts import AlertsTab
 from dashboard.tab_analytics import AnalyticsTab
+from dashboard.tab_settings import SettingsTab
 from dashboard.tab_updates import UpdatesTab
 from dashboard import currency
 from dashboard.update_dialog import UpdateDialog, UpdateNotificationBar
@@ -208,6 +209,8 @@ class SpartusOrchestrator:
         self._tab_model_state: Optional[ModelStateTab] = None
         self._tab_alerts: Optional[AlertsTab] = None
         self._tab_analytics: Optional[AnalyticsTab] = None
+        self._tab_settings: Optional[SettingsTab] = None
+        self._tab_updates: Optional[UpdatesTab] = None
 
         # ---- Auto-update ----
         self._updater: Optional[AutoUpdater] = None
@@ -218,6 +221,7 @@ class SpartusOrchestrator:
         # ---- Timers ----
         self._trading_timer: Optional[QTimer] = None
         self._dashboard_timer: Optional[QTimer] = None
+        self._manual_trade_timer: Optional[QTimer] = None
 
         # ---- State tracking ----
         self._last_bar_time: Optional[datetime] = None
@@ -247,7 +251,7 @@ class SpartusOrchestrator:
         # ---- Performance data cache (avoid 500-trade SQL query every second) ----
         self._perf_cache: Dict[str, Any] = {}
         self._perf_cache_time: float = 0.0
-        _PERF_CACHE_TTL_S = 5.0  # refresh at most every 5 seconds
+        self._PERF_CACHE_TTL_S: float = 5.0  # refresh at most every 5 seconds
 
     # ==================================================================
     # Initialization
@@ -267,6 +271,9 @@ class SpartusOrchestrator:
         # 1. Load config
         config_path = self._args.config
         self._config = LiveConfig.from_yaml(config_path)
+        # Load user-saved settings (overrides YAML defaults for UI settings)
+        if self._config.load_user_settings():
+            log.info("User settings loaded from user_settings.json")
         if self._args.paper:
             self._config.paper_trading = True
         log.info(
@@ -565,6 +572,11 @@ class SpartusOrchestrator:
         self._dashboard_timer.timeout.connect(self._dashboard_update)
         self._dashboard_timer.start(_DASHBOARD_UPDATE_INTERVAL_MS)
 
+        # Start manual trade management timer (5-second interval, independent of bar changes)
+        self._manual_trade_timer = QTimer()
+        self._manual_trade_timer.timeout.connect(self._manual_trade_loop)
+        self._manual_trade_timer.start(5000)
+
         log.info(
             "Dashboard launched. Trading loop=%dms, UI update=%dms",
             _TRADING_LOOP_INTERVAL_MS,
@@ -611,10 +623,25 @@ class SpartusOrchestrator:
         self._tab_analytics = AnalyticsTab()
         container_6.layout().addWidget(self._tab_analytics)
 
-        # Tab 7: Updates
-        container_7 = self._dashboard.get_tab("UPDATES")
+        # Tab 7: Manual Trade Management
+        container_7 = self._dashboard.get_tab("MANUAL TRADE MGMT")
+        self._tab_settings = SettingsTab()
+        container_7.layout().addWidget(self._tab_settings)
+        # Initialise toggle from config
+        self._tab_settings.set_enabled(self._config.manage_manual_trades)
+        # Load manual protection settings from config
+        self._tab_settings.load_protection_settings({
+            "be_trigger_r": self._config.manual_be_trigger_r,
+            "lock_trigger_r": self._config.manual_lock_trigger_r,
+            "lock_amount_r": self._config.manual_lock_amount_r,
+            "trail_trigger_r": self._config.manual_trail_trigger_r,
+            "trail_atr_mult": self._config.manual_trail_atr_mult,
+        })
+
+        # Tab 8: Updates
+        container_8 = self._dashboard.get_tab("UPDATES")
         self._tab_updates = UpdatesTab()
-        container_7.layout().addWidget(self._tab_updates)
+        container_8.layout().addWidget(self._tab_updates)
         # Set initial version
         version = get_local_version(BASE_DIR)
         self._tab_updates.set_current_version(version)
@@ -654,7 +681,18 @@ class SpartusOrchestrator:
         self._tab_alerts.reset_cb_requested.connect(self._on_reset_circuit_breaker)
         self._tab_alerts.reset_normalizer_requested.connect(self._on_reset_normalizer)
 
-        # Tab 7 (UpdatesTab) signals
+        # Tab 7 (SettingsTab) signals
+        self._tab_settings.manual_trade_toggled.connect(
+            self._on_manual_trade_toggled
+        )
+        self._tab_settings.manual_protection_changed.connect(
+            self._on_manual_protection_changed
+        )
+        self._tab_settings.save_settings_requested.connect(
+            self._on_save_settings
+        )
+
+        # Tab 8 (UpdatesTab) signals
         self._tab_updates.check_requested.connect(self._on_tab_check_updates)
         self._tab_updates.update_requested.connect(self._apply_update)
         self._tab_updates.restart_requested.connect(self._restart_dashboard)
@@ -882,6 +920,103 @@ class SpartusOrchestrator:
         self._add_alert("INFO", "Normalizer RESET -- z-score buffers cleared and re-warmed")
         log.info("Normalizer reset by user (conviction collapse recovery)")
 
+    def _manual_trade_loop(self) -> None:
+        """Scan and manage manual trades independently of M5 bar changes.
+
+        Runs every 5 seconds to:
+        1. Detect new manually-opened positions
+        2. Detect when a previously SL-less trade gets an SL set
+        3. Apply profit protection to all tracked positions
+
+        This runs regardless of whether a new M5 bar has formed, so
+        protection kicks in as fast as possible.
+        """
+        try:
+            if self._executor is None or self._mt5_bridge is None:
+                return
+            if not self._config.manage_manual_trades:
+                return
+
+            # Scan for new manual positions
+            adopted = self._executor.scan_manual_trades()
+            if adopted > 0:
+                self._add_alert(
+                    "INFO",
+                    f"Adopted {adopted} manual position(s) for SL management",
+                )
+
+            # Get current price for protection calculations
+            current_price = 0.0
+            bar_high = 0.0
+            bar_low = 0.0
+            if mt5 is not None:
+                tick = mt5.symbol_info_tick(self._config.mt5_symbol)
+                if tick:
+                    current_price = (tick.bid + tick.ask) / 2.0
+                    bar_high = tick.ask
+                    bar_low = tick.bid
+
+            if current_price <= 0:
+                return
+
+            atr = 1.0
+            if self._pipeline is not None:
+                atr = self._pipeline.get_current_atr() or 1.0
+
+            # Apply protection
+            manual_results = self._executor.manage_manual_positions(
+                current_price=current_price,
+                atr=atr,
+                bar_high=bar_high,
+                bar_low=bar_low,
+            )
+            for mr in manual_results:
+                if "TRAIL" in mr or "PROTECT" in mr:
+                    self._add_alert("INFO", f"Manual trade: {mr}")
+        except Exception:
+            log.exception("Error in manual trade loop")
+
+    def _on_manual_trade_toggled(self, enabled: bool) -> None:
+        """Handle manual trade management toggle from Settings tab."""
+        self._config.manage_manual_trades = enabled
+        state = "ENABLED" if enabled else "DISABLED"
+        self._add_alert("INFO", f"Manual trade management {state}")
+        log.info("Manual trade management toggled: %s", state)
+
+        # If enabled, scan for existing manual positions immediately
+        if enabled and self._executor is not None:
+            adopted = self._executor.scan_manual_trades()
+            if adopted > 0:
+                self._add_alert(
+                    "INFO",
+                    f"Adopted {adopted} existing manual position(s) for SL management",
+                )
+
+    def _on_manual_protection_changed(self, overrides: dict) -> None:
+        """Handle protection settings change from Manual Trade tab."""
+        if self._executor is not None:
+            self._executor.set_manual_protection_overrides(overrides)
+        self._add_alert(
+            "INFO",
+            f"Manual protection updated: BE={overrides.get('be_trigger_r', '?')}R "
+            f"Lock={overrides.get('lock_trigger_r', '?')}R/{overrides.get('lock_amount_r', '?')}R "
+            f"Trail={overrides.get('trail_trigger_r', '?')}R @ {overrides.get('trail_atr_mult', '?')}x ATR",
+        )
+
+    def _on_save_settings(self, settings: dict) -> None:
+        """Persist user settings to disk so they survive restarts."""
+        # Apply to config object
+        for key, value in settings.items():
+            config_key = f"manual_{key}" if not key.startswith("manage_") else key
+            if hasattr(self._config, config_key):
+                setattr(self._config, config_key, value)
+            elif hasattr(self._config, key):
+                setattr(self._config, key, value)
+
+        # Save to user_settings.json
+        path = self._config.save_user_settings()
+        self._add_alert("INFO", f"Settings saved to {path.name}")
+
     def _handle_emergency_stop(self) -> None:
         """Called by MT5Bridge heartbeat when connection is lost."""
         log.critical("MT5 connection lost -- activating emergency stop")
@@ -972,6 +1107,22 @@ class SpartusOrchestrator:
             current_price = float(m5_bars["close"].iloc[-1])
 
         atr = self._pipeline.get_current_atr()
+
+        # --- Manual trade management (also runs via dedicated timer between bars) ---
+        if self._config.manage_manual_trades:
+            self._executor.scan_manual_trades()
+            bar_high = float(m5_bars["high"].iloc[-1]) if not m5_bars.empty else current_price
+            bar_low = float(m5_bars["low"].iloc[-1]) if not m5_bars.empty else current_price
+            manual_results = self._executor.manage_manual_positions(
+                current_price=current_price,
+                atr=atr,
+                bar_high=bar_high,
+                bar_low=bar_low,
+            )
+            for mr in manual_results:
+                if "TRAIL" in mr or "PROTECT" in mr:
+                    self._add_alert("INFO", f"Manual trade: {mr}")
+
         account_state = compute_account_features(
             has_position=pos is not None,
             position_side=pos["side"] if pos else None,
@@ -1505,6 +1656,10 @@ class SpartusOrchestrator:
         elif active_idx == 5:
             self._tab_analytics.update_data(self._prepare_analytics_data())
         elif active_idx == 6:
+            self._tab_settings.update_data(
+                self._prepare_manual_trade_data()
+            )
+        elif active_idx == 7:
             self._tab_updates.update_data(self._prepare_updates_data())
 
     # ==================================================================
@@ -1664,7 +1819,7 @@ class SpartusOrchestrator:
         balance_hist = list(self._balance_history)
 
         # Return cached metrics if still fresh (just update balance)
-        if self._perf_cache and now - self._perf_cache_time < 5.0:
+        if self._perf_cache and now - self._perf_cache_time < self._PERF_CACHE_TTL_S:
             self._perf_cache["balance_history"] = balance_hist
             return self._perf_cache
 
@@ -2200,8 +2355,59 @@ class SpartusOrchestrator:
             "weekly_reports": weekly_reports,
         }
 
+    def _prepare_manual_trade_data(self) -> Dict[str, Any]:
+        """Prepare data dict for Tab 7: Manual Trade Management.
+
+        Includes live price, tick value/size for real-time P/L calculation.
+        """
+        manual_pos = (
+            self._executor.get_manual_positions()
+            if self._executor else {}
+        )
+
+        # Get current price and symbol info for live P/L
+        current_price = 0.0
+        tick_value = 0.745
+        tick_size = 0.01
+
+        if self._mt5_bridge is not None:
+            try:
+                sym_info = self._mt5_bridge.get_symbol_info(
+                    self._config.mt5_symbol
+                ) or {}
+                tick_value = sym_info.get("tick_value", 0.745)
+                tick_size = sym_info.get("tick_size", 0.01) or 0.01
+
+                # Get latest tick price for real-time display
+                if mt5 is not None:
+                    tick = mt5.symbol_info_tick(self._config.mt5_symbol)
+                    if tick:
+                        current_price = (tick.bid + tick.ask) / 2.0
+            except Exception:
+                pass
+
+            # Fallback: use last known bar close
+            if current_price <= 0:
+                try:
+                    bars = self._mt5_bridge.get_latest_bars(
+                        self._config.mt5_symbol,
+                        mt5.TIMEFRAME_M5 if mt5 else 5,
+                        1,
+                    )
+                    if bars is not None and not bars.empty:
+                        current_price = float(bars["close"].iloc[-1])
+                except Exception:
+                    pass
+
+        return {
+            "manual_positions": manual_pos,
+            "current_price": current_price,
+            "tick_value": tick_value,
+            "tick_size": tick_size,
+        }
+
     def _prepare_updates_data(self) -> Dict[str, Any]:
-        """Prepare data dict for Tab 7: Updates.
+        """Prepare data dict for Tab 8: Updates.
 
         Only passes the current version -- all other state is pushed
         via signal-driven callbacks (set_update_available, set_progress, etc.).
@@ -2222,6 +2428,8 @@ class SpartusOrchestrator:
             self._trading_timer.stop()
         if self._dashboard_timer:
             self._dashboard_timer.stop()
+        if self._manual_trade_timer:
+            self._manual_trade_timer.stop()
 
         # Save normalizer state
         if self._pipeline:

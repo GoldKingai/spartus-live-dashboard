@@ -86,7 +86,7 @@ class MetricCard(QWidget):
 
         # Label (subtext color)
         self._label = QLabel(label)
-        self._label.setStyleSheet(f"color: {C['subtext']}; font-size: 11px;")
+        self._label.setStyleSheet(f"color: {C['subtext']}; font-size: 12px;")
         self._label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self._label)
 

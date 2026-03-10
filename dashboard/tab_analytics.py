@@ -870,7 +870,7 @@ class AnalyticsTab(QWidget):
             f"consecutive: {yellow_consec}/3 yel, {red_consec}/2 red"
         )
         self._lbl_corr_consecutive.setStyleSheet(
-            f"color: {C['label']}; font-size: 11px; "
+            f"color: {C['label']}; font-size: 12px; "
             f"background: transparent; border: none;"
         )
 

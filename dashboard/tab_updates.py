@@ -340,7 +340,7 @@ class UpdatesTab(QWidget):
         self._btn_check.setEnabled(True)
         self._check_status.setText("Check failed (no internet?)")
         self._check_status.setStyleSheet(
-            f"color: {C['red']}; font-size: 11px; background: transparent; border: none;"
+            f"color: {C['red']}; font-size: 12px; background: transparent; border: none;"
         )
 
     def set_progress(self, message: str) -> None:

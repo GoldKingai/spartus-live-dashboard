@@ -50,14 +50,15 @@ class TradingState:
 class LiveDashboard(QMainWindow):
     """Main application window for the Spartus Live Trading Dashboard.
 
-    Contains 7 tabs:
-    1. LIVE STATUS   -- Connection, account, position, AI decisions
-    2. PERFORMANCE   -- Balance chart, rolling metrics, trade history
-    3. TRADE JOURNAL -- Lesson summary, trade detail
-    4. MODEL & FEATURES -- Model info, feature health, correlated feeds
-    5. ALERTS & SAFETY  -- Safety status, controls, alert log
-    6. ANALYTICS     -- Action distributions, training vs live, drift
-    7. UPDATES       -- Version info, update check, download & restart
+    Contains 8 tabs:
+    1. LIVE STATUS        -- Connection, account, position, AI decisions
+    2. PERFORMANCE        -- Balance chart, rolling metrics, trade history
+    3. TRADE JOURNAL      -- Lesson summary, trade detail
+    4. MODEL & FEATURES   -- Model info, feature health, correlated feeds
+    5. ALERTS & SAFETY    -- Safety status, controls, alert log
+    6. ANALYTICS          -- Action distributions, training vs live, drift
+    7. MANUAL TRADE MGMT  -- Live manual position tracking & SL protection
+    8. UPDATES            -- Version info, update check, download & restart
     """
 
     def __init__(self) -> None:
@@ -245,7 +246,7 @@ class LiveDashboard(QMainWindow):
     # ------------------------------------------------------------------
 
     def _create_tabs(self) -> None:
-        """Create the QTabWidget with 7 placeholder tabs.
+        """Create the QTabWidget with 8 placeholder tabs.
 
         Each tab is an empty QWidget with a QVBoxLayout.  The actual
         per-tab content is built by dedicated tab modules that populate
@@ -260,6 +261,7 @@ class LiveDashboard(QMainWindow):
             "MODEL & FEATURES",
             "ALERTS & SAFETY",
             "ANALYTICS",
+            "MANUAL TRADE MGMT",
             "UPDATES",
         ]
 

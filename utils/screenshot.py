@@ -287,7 +287,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Capture Spartus Dashboard screenshot")
     parser.add_argument("--output", "-o", help="Output PNG path")
-    parser.add_argument("--tab", "-t", type=int, help="Tab index to capture (0-5)")
+    parser.add_argument("--tab", "-t", type=int, help="Tab index to capture (0-7)")
     parser.add_argument(
         "--title", default="SPARTUS",
         help="Window title substring to match",

@@ -132,6 +132,13 @@ class TradeExecutor:
         # --- Broker constraints (injected after init) ---
         self._broker_constraints = None
 
+        # --- Manual trade management ---
+        # Tracks manually-opened positions (magic != 234000) for SL protection.
+        # Key = MT5 ticket, Value = tracking dict with entry_price, side, etc.
+        self._manual_positions: Dict[int, Dict[str, Any]] = {}
+        # Runtime overrides from UI sliders (separate from AI protection)
+        self._manual_protection_overrides: Dict[str, float] = {}
+
         # --- Trades log file ---
         self._trades_log_path = self._resolve_path("storage/logs/trades.jsonl")
         self._trades_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -538,10 +545,18 @@ class TradeExecutor:
         if abs(direction) < self._config.direction_threshold:
             return "HOLD_FLAT"
 
-        # 1b. Combined signal gate (matches training FIX-3)
-        combined_signal = abs(direction) * conviction
-        if combined_signal < 0.15:
-            return "HOLD_FLAT"
+        # 1b. Conviction floor override: if direction is strong but conviction
+        # is near-zero (model knows direction but won't commit), force minimum
+        # conviction so the trade enters at minimum lot size.  The model's
+        # direction signal is valid — conviction is suppressed because the
+        # price regime ($5200+) is unfamiliar vs training ($1200-2000).
+        conviction_floor = getattr(self._config, "conviction_tier_low", 0.15)
+        if conviction < conviction_floor and abs(direction) >= self._config.direction_threshold:
+            log.info(
+                "CONVICTION OVERRIDE: raw=%.3f -> floor=%.3f (direction=%.3f strong enough)",
+                conviction, conviction_floor, direction,
+            )
+            conviction = conviction_floor
 
         # Determine side
         side = "LONG" if direction > 0 else "SHORT"
@@ -607,6 +622,14 @@ class TradeExecutor:
         if lots <= 0:
             log.debug("Lot size is zero (risk budget exhausted)")
             return "LOTS_ZERO"
+
+        # Log scalp mode for visibility
+        tier_mid = getattr(self._config, "conviction_tier_mid", 0.30)
+        if conviction < tier_mid:
+            log.info(
+                "SCALP ENTRY: %s conv=%.3f (below %.2f), lots=%.4f (minimum)",
+                side, conviction, tier_mid, lots,
+            )
 
         # 4. SL / TP — SL uses direction-scaled conviction (FIX-10), TP uses raw conviction
         sl_price = self._risk.calculate_sl(side, current_price, atr, sl_conviction)
@@ -1185,6 +1208,286 @@ class TradeExecutor:
                 f.write(json.dumps(alert, default=str) + "\n")
         except Exception as exc:
             log.warning("Failed to write protection alert: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Manual trade management (user-opened positions)
+    # ------------------------------------------------------------------
+
+    def scan_manual_trades(self) -> int:
+        """Detect manually-opened positions and start tracking them.
+
+        Scans MT5 for positions on the primary symbol where
+        magic != 234000 (not placed by Spartus).  New positions are
+        adopted for SL management; closed ones are removed from tracking.
+
+        Returns:
+            Number of newly adopted manual positions.
+        """
+        if not self._config.manage_manual_trades:
+            return 0
+
+        try:
+            all_positions = self._bridge.get_open_positions(
+                self._config.mt5_symbol,
+            )
+        except Exception:
+            log.exception("scan_manual_trades: failed to query MT5")
+            return 0
+
+        if not all_positions:
+            all_positions = []
+
+        # Find manual positions (magic != 234000)
+        manual_positions = [
+            p for p in all_positions if p.get("magic", 0) != 234000
+        ]
+        open_tickets = {p["ticket"] for p in manual_positions}
+
+        # Remove closed manual positions from tracking
+        closed = [t for t in self._manual_positions if t not in open_tickets]
+        for ticket in closed:
+            mp = self._manual_positions.pop(ticket)
+            log.info(
+                "Manual trade ticket=%d (%s) closed externally — "
+                "stopped tracking",
+                ticket, mp.get("side", "?"),
+            )
+
+        # Adopt new manual positions
+        adopted = 0
+        for pos in manual_positions:
+            ticket = pos["ticket"]
+            if ticket in self._manual_positions:
+                # Already tracking — update current SL from MT5
+                mt5_sl = pos.get("sl", 0.0)
+                self._manual_positions[ticket]["current_sl"] = mt5_sl
+
+                # If initial_sl was 0 (no SL at adoption) but user has now
+                # set one, adopt it as the initial risk reference.
+                if self._manual_positions[ticket]["initial_sl"] <= 0 and mt5_sl > 0:
+                    self._manual_positions[ticket]["initial_sl"] = mt5_sl
+                    log.info(
+                        "Manual trade ticket=%d: SL detected (%.2f) — "
+                        "protection now active (R = %.2f)",
+                        ticket, mt5_sl,
+                        abs(self._manual_positions[ticket]["entry_price"] - mt5_sl),
+                    )
+                continue
+
+            side = "LONG" if pos.get("type", 0) == 0 else "SHORT"
+            initial_sl = pos.get("sl", 0.0)
+
+            self._manual_positions[ticket] = {
+                "ticket": ticket,
+                "side": side,
+                "entry_price": pos["price_open"],
+                "lots": pos["volume"],
+                "initial_sl": initial_sl,
+                "current_sl": initial_sl,
+                "tp": pos.get("tp", 0.0),
+                "protection_stage": 0,
+                "max_favorable": 0.0,
+                "open_time": pos.get("time", datetime.now(timezone.utc)),
+                "sl_modifications": [],
+            }
+            adopted += 1
+            sl_msg = f"SL={initial_sl:.2f}" if initial_sl > 0 else "NO SL (waiting)"
+            log.warning(
+                "ADOPTED manual trade: ticket=%d %s %.3f lots @ %.2f "
+                "%s TP=%.2f (magic=%d) — will manage SL",
+                ticket, side, pos["volume"], pos["price_open"],
+                sl_msg, pos.get("tp", 0.0), pos.get("magic", 0),
+            )
+
+        return adopted
+
+    def manage_manual_positions(
+        self,
+        current_price: float,
+        atr: float,
+        bar_high: float = 0.0,
+        bar_low: float = 0.0,
+    ) -> List[str]:
+        """Apply profit protection to all tracked manual positions.
+
+        Only tightens SL — never loosens, never sets TP, never closes.
+        Uses SEPARATE settings from AI trades (configurable via UI):
+            Stage 1: Breakeven at configurable R trigger
+            Stage 2: Lock configurable R at configurable trigger
+            Stage 3: ATR trail at configurable trigger
+
+        Args:
+            current_price: Current close price.
+            atr: Current ATR(14) value.
+            bar_high: Current bar high (for MFE tracking).
+            bar_low: Current bar low (for MFE tracking).
+
+        Returns:
+            List of action strings for each managed position.
+        """
+        if not self._config.manage_manual_trades:
+            return []
+        if not self._manual_positions:
+            return []
+
+        results: List[str] = []
+        high = bar_high if bar_high > 0 else current_price
+        low = bar_low if bar_low > 0 else current_price
+
+        for ticket, mp in list(self._manual_positions.items()):
+            # Update max favorable excursion
+            if mp["side"] == "LONG":
+                favorable = high - mp["entry_price"]
+            else:
+                favorable = mp["entry_price"] - low
+
+            if favorable > mp["max_favorable"]:
+                mp["max_favorable"] = favorable
+
+            # Skip if no SL set (can't compute R)
+            if mp["initial_sl"] <= 0:
+                results.append(f"MANUAL_{ticket}_NO_SL")
+                continue
+
+            # Apply profit protection (uses MANUAL-specific settings, not AI)
+            spread = self._bar_spread * 0.01 if self._bar_spread else 0.0
+            protection_sl, new_stage = self._risk.apply_manual_profit_protection(
+                position={
+                    "side": mp["side"],
+                    "entry_price": mp["entry_price"],
+                    "stop_loss": mp["current_sl"],
+                    "initial_sl": mp["initial_sl"],
+                    "max_favorable": mp["max_favorable"],
+                    "protection_stage": mp["protection_stage"],
+                },
+                current_price=current_price,
+                atr=atr,
+                spread_points=spread,
+                overrides=self._manual_protection_overrides,
+            )
+
+            # Log stage transitions
+            if new_stage > mp["protection_stage"]:
+                r_distance = abs(mp["entry_price"] - mp["initial_sl"])
+                r_current = mp["max_favorable"] / r_distance if r_distance > 0 else 0.0
+                stage_names = {1: "BE", 2: "LOCK", 3: "ATR_TRAIL"}
+                log.info(
+                    "MANUAL PROTECT: ticket=%d %s  stage %d->%d (%s)  "
+                    "R=%.2f  sl %.2f -> %.2f",
+                    ticket, mp["side"],
+                    mp["protection_stage"], new_stage,
+                    stage_names.get(new_stage, "?"),
+                    r_current, mp["current_sl"], protection_sl,
+                )
+                # Log to alerts.jsonl
+                self._log_manual_protection_event(
+                    mp, new_stage, protection_sl, r_current,
+                )
+
+            mp["protection_stage"] = new_stage
+
+            # Check if SL actually needs to move
+            sl_changed = False
+            sym_info = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+            tick_size = sym_info.get("tick_size", 0.01) or 0.01
+
+            if mp["side"] == "LONG" and protection_sl > mp["current_sl"] + tick_size:
+                sl_changed = True
+            elif mp["side"] == "SHORT" and protection_sl < mp["current_sl"] - tick_size:
+                sl_changed = True
+
+            if sl_changed:
+                success = self._bridge.modify_position(
+                    ticket=ticket,
+                    sl=protection_sl,
+                )
+                if success:
+                    old_sl = mp["current_sl"]
+                    mp["current_sl"] = protection_sl
+                    mp["sl_modifications"].append({
+                        "bar": self._step_count,
+                        "old_sl": round(old_sl, 2),
+                        "new_sl": round(protection_sl, 2),
+                        "stage": new_stage,
+                        "price": round(current_price, 2),
+                    })
+                    log.info(
+                        "MANUAL TRAIL: ticket=%d %s  sl %.2f -> %.2f  "
+                        "stage=%d",
+                        ticket, mp["side"], old_sl, protection_sl,
+                        new_stage,
+                    )
+                    results.append(
+                        f"MANUAL_{ticket}_TRAIL_{protection_sl:.2f}"
+                    )
+                else:
+                    log.warning(
+                        "Failed to modify SL for manual trade ticket=%d",
+                        ticket,
+                    )
+                    results.append(f"MANUAL_{ticket}_MODIFY_FAILED")
+            else:
+                results.append(f"MANUAL_{ticket}_HOLD")
+
+        return results
+
+    def get_manual_positions(self) -> Dict[int, Dict[str, Any]]:
+        """Return the current manual position tracking dict (for UI)."""
+        return dict(self._manual_positions)
+
+    def set_manual_protection_overrides(self, overrides: Dict[str, float]) -> None:
+        """Set runtime protection overrides from UI sliders.
+
+        Keys: be_trigger_r, lock_trigger_r, lock_amount_r,
+              trail_trigger_r, trail_atr_mult, be_buffer_pips.
+        """
+        self._manual_protection_overrides = dict(overrides)
+        log.info("Manual protection overrides updated: %s", overrides)
+
+    def get_manual_protection_overrides(self) -> Dict[str, float]:
+        """Return current manual protection overrides."""
+        return dict(self._manual_protection_overrides)
+
+    def _log_manual_protection_event(
+        self,
+        mp: Dict[str, Any],
+        stage: int,
+        new_sl: float,
+        r_current: float,
+    ) -> None:
+        """Log a manual trade protection event to alerts.jsonl."""
+        stage_names = {1: "MANUAL_PROTECT_BE", 2: "MANUAL_PROTECT_LOCK",
+                       3: "MANUAL_PROTECT_TRAIL"}
+        stage_name = stage_names.get(stage, f"MANUAL_PROTECT_{stage}")
+
+        r_distance = abs(mp["entry_price"] - mp["initial_sl"])
+        if mp["side"] == "LONG":
+            locked_r = ((new_sl - mp["entry_price"]) / r_distance
+                        if r_distance > 0 else 0.0)
+        else:
+            locked_r = ((mp["entry_price"] - new_sl) / r_distance
+                        if r_distance > 0 else 0.0)
+
+        alert = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": stage_name,
+            "ticket": mp.get("ticket", 0),
+            "side": mp["side"],
+            "stage": stage,
+            "r_current": round(r_current, 3),
+            "locked_r": round(locked_r, 3),
+            "new_sl": round(new_sl, 2),
+            "entry_price": mp["entry_price"],
+            "initial_sl": round(mp["initial_sl"], 2),
+            "manual_trade": True,
+        }
+
+        try:
+            alerts_path = self._resolve_path("storage/logs/alerts.jsonl")
+            with open(alerts_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(alert, default=str) + "\n")
+        except Exception as exc:
+            log.warning("Failed to write manual protection alert: %s", exc)
 
     # ------------------------------------------------------------------
     # JSONL trade log

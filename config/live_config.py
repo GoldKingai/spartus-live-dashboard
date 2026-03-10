@@ -8,10 +8,26 @@ Load user overrides from YAML via:
 """
 
 from dataclasses import dataclass, field
+import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
+
+_log = logging.getLogger(__name__)
+
+# Settings the user can change from the UI and persist across restarts.
+# These are the ONLY fields written to user_settings.json.
+_USER_SAVEABLE_FIELDS = {
+    "manage_manual_trades",
+    "manual_be_trigger_r",
+    "manual_be_buffer_pips",
+    "manual_lock_trigger_r",
+    "manual_lock_amount_r",
+    "manual_trail_trigger_r",
+    "manual_trail_atr_mult",
+}
 
 
 def _default_symbol_map() -> Dict[str, str]:
@@ -110,8 +126,16 @@ class LiveConfig:
     min_sl_atr: float = 1.0              # Minimum SL distance: 1.0 ATR (matches training)
     min_sl_trail_atr: float = 0.5        # Minimum trailing SL distance: 0.5 ATR (matches training)
     direction_threshold: float = 0.3
-    min_conviction: float = 0.30          # Raised from 0.15 based on Week 1 data (conv<0.3 = net negative)
+    min_conviction: float = 0.15          # Lowered: model outputs 0.15-0.30 range; tiered sizing handles risk
     elevated_conviction_threshold: float = 0.6  # Required after soft cap reached
+
+    # ---- Tiered Conviction Sizing ------------------------------------------
+    # Low-conviction trades use minimum lots (scalp mode).
+    # This lets the AI "dip its toes in" instead of sitting out entirely.
+    conviction_tier_low: float = 0.15     # Below this: no trade
+    conviction_tier_mid: float = 0.30     # 0.15-0.30: minimum lot size (scalp)
+    conviction_tier_high: float = 0.50    # 0.30-0.50: reduced lot size (cautious)
+    # Above 0.50: full conviction-based sizing (as before)
     exit_threshold: float = 0.6           # Matched to training (was 0.5, caused early exits)
     allow_min_lot_override: bool = False  # Disabled: min-lot must still pass hard risk cap
 
@@ -123,6 +147,15 @@ class LiveConfig:
     protection_trail_trigger_r: float = 2.0    # Stage 3: ATR trail at +2.0R
     protection_trail_atr_mult: float = 1.0     # Trail distance = 1.0 * ATR
     point: float = 0.01                        # XAUUSD price point
+
+    # ---- Manual Trade Protection (independent from AI protection) --------
+    # These ONLY affect manually-opened trades. AI trades use the values above.
+    manual_be_trigger_r: float = 1.0           # Stage 1: breakeven trigger
+    manual_be_buffer_pips: float = 0.5         # Buffer above entry for BE
+    manual_lock_trigger_r: float = 1.5         # Stage 2: lock profit trigger
+    manual_lock_amount_r: float = 0.5          # Lock amount in R
+    manual_trail_trigger_r: float = 2.0        # Stage 3: ATR trail trigger
+    manual_trail_atr_mult: float = 1.0         # Trail distance multiplier
 
     # ---- Circuit breakers ------------------------------------------------
     consecutive_loss_pause: int = 5
@@ -164,6 +197,12 @@ class LiveConfig:
     calendar_csv_path: str = "data/calendar/economic_calendar.csv"
     calendar_static_path: str = "data/calendar/known_events.json"
     calendar_bridge_max_age_s: int = 7200
+
+    # ---- Manual trade management ------------------------------------------
+    # When enabled, the AI detects manually-opened positions (magic != 234000)
+    # on the primary symbol and applies profit protection (staged trailing SL).
+    # It will NOT open or close the position — only manage the stop loss.
+    manage_manual_trades: bool = True
 
     # ---- Paper trading ---------------------------------------------------
     paper_trading: bool = True
@@ -345,3 +384,63 @@ class LiveConfig:
             else:
                 d[f.name] = val
         return d
+
+    # ------------------------------------------------------------------
+    # User settings persistence
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _user_settings_path(cls) -> Path:
+        """Path to the user settings file (lives next to default_config.yaml)."""
+        return cls.get_base_dir() / "config" / "user_settings.json"
+
+    def save_user_settings(self) -> Path:
+        """Save user-adjustable settings to ``config/user_settings.json``.
+
+        Only saves the fields listed in ``_USER_SAVEABLE_FIELDS`` so that
+        the file stays small and only contains intentional user choices.
+
+        Returns:
+            Path to the saved file.
+        """
+        data = {}
+        for key in _USER_SAVEABLE_FIELDS:
+            if hasattr(self, key):
+                data[key] = getattr(self, key)
+
+        path = self._user_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        _log.info("User settings saved to %s: %s", path, data)
+        return path
+
+    def load_user_settings(self) -> bool:
+        """Load user settings from ``config/user_settings.json``.
+
+        Overwrites the corresponding fields on *self*.  Fields not present
+        in the file are left at their current value (from YAML or default).
+
+        Returns:
+            True if settings were loaded, False if file doesn't exist.
+        """
+        path = self._user_settings_path()
+        if not path.exists():
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            _log.warning("Failed to load user settings from %s: %s", path, exc)
+            return False
+
+        applied = []
+        for key, value in data.items():
+            if key in _USER_SAVEABLE_FIELDS and hasattr(self, key):
+                setattr(self, key, value)
+                applied.append(key)
+
+        if applied:
+            _log.info("Loaded user settings from %s: %s", path, applied)
+        return True

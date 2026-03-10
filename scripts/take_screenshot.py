@@ -40,6 +40,7 @@ _TAB_CMD_FILE = BASE_DIR / "storage" / "state" / "_tab_switch_cmd.json"
 TAB_NAMES = [
     "LIVE_STATUS", "PERFORMANCE", "TRADE_JOURNAL",
     "MODEL_FEATURES", "ALERTS_SAFETY", "ANALYTICS",
+    "MANUAL_TRADE_MGMT", "UPDATES",
 ]
 
 
@@ -215,11 +216,11 @@ def main():
         description="Capture a screenshot of the Spartus Live Dashboard"
     )
     parser.add_argument("--output", "-o", help="Output file path (PNG preferred)")
-    parser.add_argument("--tab", "-t", type=int, choices=range(6),
+    parser.add_argument("--tab", "-t", type=int, choices=range(8),
                         help="Tab index: 0=Live Status, 1=Performance, 2=Journal, "
-                             "3=Model, 4=Alerts, 5=Analytics")
+                             "3=Model, 4=Alerts, 5=Analytics, 6=Manual Trade, 7=Updates")
     parser.add_argument("--all", action="store_true",
-                        help="Capture all 6 tabs")
+                        help="Capture all 8 tabs")
     parser.add_argument(
         "--title", default="SPARTUS LIVE TRADING",
         help="Window title to search for (default: SPARTUS LIVE TRADING)",
@@ -236,10 +237,10 @@ def main():
         sys.exit(1)
 
     if args.all:
-        # Capture all 6 tabs
+        # Capture all 8 tabs
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         paths = []
-        for i in range(6):
+        for i in range(8):
             switch_tab(hwnd, i)
             out = str(SCREENSHOT_DIR / f"live_{ts}_tab{i}_{TAB_NAMES[i]}.png")
             capture_window(hwnd, out)

@@ -36,7 +36,7 @@ risk:
   min_sl_atr: 1.0             # Minimum SL distance: 1.0 ATR
   min_sl_trail_atr: 0.5       # Minimum trailing SL distance: 0.5 ATR
   direction_threshold: 0.3    # |direction| must exceed this to open
-  min_conviction: 0.30        # Conviction floor (raised from 0.15 based on Week 1 data)
+  min_conviction: 0.15        # Conviction floor (lowered: override lifts to 0.15 when direction strong)
   elevated_conviction_threshold: 0.6  # Required after daily_trade_soft_cap reached
   exit_threshold: 0.6         # Matched to training (was 0.5, caused early exits)
   allow_min_lot_override: false  # Disabled: min-lot must still pass hard risk cap
@@ -106,6 +106,14 @@ calendar:
   calendar_csv_path: "data/calendar/economic_calendar.csv"
   calendar_static_path: "data/calendar/known_events.json"
   calendar_bridge_max_age_s: 7200     # Max age before stale (2 hours)
+
+# --- Manual trade management ------------------------------------------------
+# When enabled, the AI detects manually-opened positions (not placed by Spartus)
+# on the primary symbol and automatically manages the stop loss using the same
+# staged profit protection (BE -> Lock +0.5R -> ATR Trail).
+# It will NOT open or close your trades — only trail the SL to protect profits.
+# Perfect for when you open a trade manually and want the AI to manage it overnight.
+manage_manual_trades: false
 
 # --- Paper trading ----------------------------------------------------------
 paper_trading: true

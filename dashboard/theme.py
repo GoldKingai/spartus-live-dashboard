@@ -206,7 +206,7 @@ def get_stylesheet() -> str:
         border-radius: 4px;
         text-align: center;
         color: {C['text']};
-        font-size: 11px;
+        font-size: 12px;
     }}
     QProgressBar::chunk {{
         background-color: {C['green']};

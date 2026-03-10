@@ -176,6 +176,23 @@ class LiveRiskManager:
         else:
             dd_mult = 1.0
 
+        # --- Tiered conviction sizing ---
+        # Low conviction (0.15-0.30): force minimum lot size (scalp mode)
+        # Mid conviction (0.30-0.50): use reduced conviction for sizing
+        # High conviction (0.50+): full conviction-based sizing
+        tier_low = getattr(self.cfg, "conviction_tier_low", 0.15)
+        tier_mid = getattr(self.cfg, "conviction_tier_mid", 0.30)
+        tier_high = getattr(self.cfg, "conviction_tier_high", 0.50)
+        force_min_lot = False
+
+        if conviction < tier_mid:
+            # Scalp mode: will force minimum lot after calculation
+            force_min_lot = True
+            logger.info("Scalp mode: conviction %.3f < %.2f, will use min lot", conviction, tier_mid)
+        elif conviction < tier_high:
+            # Cautious mode: cap conviction at 0.30 for sizing (smaller lots)
+            conviction = min(conviction, tier_mid)
+
         # FIX-10: Direction-scaled conviction for SL distance (matches training)
         if sl_conviction is None:
             sl_conviction = conviction
@@ -342,11 +359,18 @@ class LiveRiskManager:
                 )
                 return 0.0
 
+        # --- Scalp mode: force minimum lot for low-conviction trades ---
+        if force_min_lot:
+            lots = vol_min
+            logger.info(
+                "SCALP MODE: forcing vol_min=%.4f (low conviction tier)", vol_min,
+            )
+
         logger.info(
             "LOT_SIZING RESULT: lots=%.4f  actual_risk=%.2f (%.1f%%)  "
-            "cap=%.2f (%.1f%%)  mt5_exact=%s",
+            "cap=%.2f (%.1f%%)  mt5_exact=%s  scalp=%s",
             lots, actual_risk, actual_risk / balance * 100 if balance > 0 else 0,
-            risk_cap_abs, self.cfg.absolute_risk_cap_pct * 100, use_mt5,
+            risk_cap_abs, self.cfg.absolute_risk_cap_pct * 100, use_mt5, force_min_lot,
         )
 
         return lots
@@ -446,6 +470,121 @@ class LiveRiskManager:
         lock_amount = getattr(self.cfg, "protection_lock_amount_r", 0.5)
         trail_trigger = getattr(self.cfg, "protection_trail_trigger_r", 2.0)
         trail_atr = getattr(self.cfg, "protection_trail_atr_mult", 1.0)
+
+        # Determine highest eligible stage
+        if r_multiple >= trail_trigger:
+            target_stage = 3
+        elif r_multiple >= lock_trigger:
+            target_stage = 2
+        elif r_multiple >= be_trigger:
+            target_stage = 1
+        else:
+            target_stage = 0
+
+        new_stage = max(stage, target_stage)
+
+        # Calculate protection floor
+        if new_stage >= 3:
+            min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
+            trail = max(trail_atr * atr, min_trail_atr * atr)
+            if side == "LONG":
+                floor_sl = current_price - trail
+            else:
+                floor_sl = current_price + trail
+        elif new_stage == 2:
+            lock_dist = lock_amount * r_distance
+            if side == "LONG":
+                floor_sl = entry + lock_dist
+            else:
+                floor_sl = entry - lock_dist
+        elif new_stage == 1:
+            if side == "LONG":
+                floor_sl = entry + be_buffer
+            else:
+                floor_sl = entry - be_buffer
+        else:
+            return current_sl, new_stage
+
+        # Only tighten
+        if side == "LONG":
+            new_sl = max(floor_sl, current_sl)
+        else:
+            new_sl = min(floor_sl, current_sl)
+
+        return new_sl, new_stage
+
+    # ------------------------------------------------------------------
+    # Manual trade protection (separate settings from AI)
+    # ------------------------------------------------------------------
+
+    def apply_manual_profit_protection(
+        self,
+        position: dict,
+        current_price: float,
+        atr: float,
+        spread_points: float = 0.0,
+        overrides: dict | None = None,
+    ) -> tuple:
+        """Apply staged SL protection using manual-specific settings.
+
+        Identical logic to apply_profit_protection() but reads from
+        manual_* config fields (or runtime overrides from the UI).
+
+        Args:
+            position: Same dict as apply_profit_protection.
+            current_price: Current market price.
+            atr: Current ATR(14).
+            spread_points: Current spread in price points.
+            overrides: Optional dict of runtime overrides from UI sliders.
+                Keys: be_trigger_r, lock_trigger_r, lock_amount_r,
+                      trail_trigger_r, trail_atr_mult, be_buffer_pips.
+
+        Returns:
+            (new_sl, new_stage)
+        """
+        ov = overrides or {}
+
+        side = position["side"]
+        entry = position["entry_price"]
+        initial_sl = position.get("initial_sl", position["stop_loss"])
+        current_sl = position["stop_loss"]
+        mfe = position.get("max_favorable", 0.0)
+        stage = position.get("protection_stage", 0)
+
+        r_distance = abs(entry - initial_sl)
+        if r_distance <= 0:
+            return current_sl, stage
+
+        r_multiple = mfe / r_distance
+
+        # Read manual-specific settings (UI overrides > config > defaults)
+        point = getattr(self.cfg, "point", 0.01)
+        be_buffer_pips = ov.get(
+            "be_buffer_pips",
+            getattr(self.cfg, "manual_be_buffer_pips", 0.5),
+        )
+        be_buffer = max(spread_points, be_buffer_pips * point)
+
+        be_trigger = ov.get(
+            "be_trigger_r",
+            getattr(self.cfg, "manual_be_trigger_r", 1.0),
+        )
+        lock_trigger = ov.get(
+            "lock_trigger_r",
+            getattr(self.cfg, "manual_lock_trigger_r", 1.5),
+        )
+        lock_amount = ov.get(
+            "lock_amount_r",
+            getattr(self.cfg, "manual_lock_amount_r", 0.5),
+        )
+        trail_trigger = ov.get(
+            "trail_trigger_r",
+            getattr(self.cfg, "manual_trail_trigger_r", 2.0),
+        )
+        trail_atr = ov.get(
+            "trail_atr_mult",
+            getattr(self.cfg, "manual_trail_atr_mult", 1.0),
+        )
 
         # Determine highest eligible stage
         if r_multiple >= trail_trigger:

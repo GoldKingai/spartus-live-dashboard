@@ -76,7 +76,7 @@ class UpdateDialog(QDialog):
         if info.published_at:
             date_str = info.published_at[:10]
             date_label = QLabel(f"Released: {date_str}")
-            date_label.setStyleSheet("color: #636e72; font-size: 10px;")
+            date_label.setStyleSheet("color: #636e72; font-size: 12px;")
             layout.addWidget(date_label)
 
         # Release notes
@@ -98,7 +98,7 @@ class UpdateDialog(QDialog):
 
         # Status label (hidden initially)
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #fdcb6e; font-size: 11px;")
+        self.status_label.setStyleSheet("color: #fdcb6e; font-size: 12px;")
         self.status_label.setVisible(False)
         layout.addWidget(self.status_label)
 
@@ -154,11 +154,11 @@ class UpdateDialog(QDialog):
         self.status_label.setText(message)
 
         if success:
-            self.status_label.setStyleSheet("color: #00b894; font-size: 11px;")
+            self.status_label.setStyleSheet("color: #00b894; font-size: 12px;")
             self.restart_btn.setVisible(True)
             self.update_btn.setVisible(False)
         else:
-            self.status_label.setStyleSheet("color: #e17055; font-size: 11px;")
+            self.status_label.setStyleSheet("color: #e17055; font-size: 12px;")
             self.update_btn.setEnabled(True)
             self.skip_btn.setEnabled(True)
             self.later_btn.setEnabled(True)
@@ -184,7 +184,7 @@ class UpdateNotificationBar(QLabel):
         )
         self.setStyleSheet(
             "background-color: #0f3460; color: #e0e0e0; padding: 6px 12px; "
-            "border-bottom: 2px solid #00b894; font-size: 11px;"
+            "border-bottom: 2px solid #00b894; font-size: 12px;"
         )
         self.setOpenExternalLinks(False)
         self.linkActivated.connect(self._on_link)
