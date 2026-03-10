@@ -362,7 +362,19 @@ class AutoUpdater:
                 self._progress("Checking dependencies...")
                 self._install_requirements()
 
-            # --- Step 6: Verify ---
+            # --- Step 6: Verify key files exist ---
+            self._progress("Verifying update...")
+            missing = self._verify_update()
+            if missing:
+                log.error("Post-update verification failed. Missing: %s", missing)
+                self._rollback(backup_dir)
+                if self.on_update_complete:
+                    self.on_update_complete(
+                        False,
+                        f"Update verification failed — rolled back. Missing files: {', '.join(missing)}"
+                    )
+                return False
+
             new_version = get_local_version(self.root)
             self._current_version = new_version
 
@@ -418,7 +430,7 @@ class AutoUpdater:
         for item in self.root.iterdir():
             name = item.name
             # Skip preserved directories, venv, __pycache__, .git
-            if name in _PRESERVE_DIRS or name in ("venv", ".venv", "__pycache__", ".git"):
+            if name in _PRESERVE_DIRS or name in ("venv", ".venv", "__pycache__", ".git", "python"):
                 continue
             dest = backup_dir / name
             try:
@@ -439,9 +451,11 @@ class AutoUpdater:
             - Files in _PRESERVE_FILES are never overwritten
             - venv/ is never touched
             - Everything else is replaced with the new version
+            - All __pycache__ dirs are cleaned after replacement
         """
         count = 0
-        preserve_dirs_set = set(_PRESERVE_DIRS + ["venv", ".venv", "__pycache__", ".git"])
+        failed = []
+        preserve_dirs_set = set(_PRESERVE_DIRS + ["venv", ".venv", "__pycache__", ".git", "python"])
 
         for item in source_dir.iterdir():
             name = item.name
@@ -458,23 +472,77 @@ class AutoUpdater:
 
             try:
                 if item.is_dir():
-                    # For directories, merge: delete old, copy new
-                    # But check for preserved files inside
                     self._merge_directory(item, dest)
                 else:
-                    shutil.copy2(item, dest)
+                    self._safe_copy(item, dest)
                 count += 1
             except Exception as e:
                 log.warning("Failed to update %s: %s", name, e)
+                failed.append(name)
+
+        # Clean all __pycache__ dirs to avoid stale .pyc files
+        self._clean_pycache(self.root)
+
+        if failed:
+            log.warning("Files that failed to update: %s", ", ".join(failed))
 
         return count
 
+    @staticmethod
+    def _safe_copy(src: Path, dest: Path) -> None:
+        """Copy a file, handling Windows file-in-use errors.
+
+        On Windows, running Python processes lock .py files. We handle
+        this by writing to a temp file first, then renaming (which is
+        more likely to succeed even if the original is locked).
+        """
+        import time
+
+        # Try direct copy first (fastest)
+        try:
+            shutil.copy2(src, dest)
+            return
+        except PermissionError:
+            pass
+
+        # Fallback: write to temp file next to dest, then rename
+        tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            shutil.copy2(src, tmp_dest)
+            # Try to remove old file and rename temp
+            for attempt in range(3):
+                try:
+                    if dest.exists():
+                        dest.unlink()
+                    tmp_dest.rename(dest)
+                    return
+                except PermissionError:
+                    time.sleep(0.1 * (attempt + 1))
+            # Last resort: leave the .tmp file — startup script can clean up
+            log.warning("File locked, saved as %s — will be applied on restart", tmp_dest.name)
+        except Exception as e:
+            # Clean up temp if rename failed
+            if tmp_dest.exists():
+                tmp_dest.unlink(missing_ok=True)
+            raise e
+
+    @staticmethod
+    def _clean_pycache(root: Path) -> None:
+        """Remove all __pycache__ directories to prevent stale .pyc imports."""
+        count = 0
+        for cache_dir in root.rglob("__pycache__"):
+            try:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                count += 1
+            except Exception:
+                pass
+        if count:
+            log.info("Cleaned %d __pycache__ directories", count)
+
     def _merge_directory(self, src_dir: Path, dest_dir: Path) -> None:
         """Merge a source directory into dest, respecting preserved files."""
-        # Ensure dest exists
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Track what's in the new version
         new_items = set()
 
         for item in src_dir.iterdir():
@@ -487,23 +555,18 @@ class AutoUpdater:
             except ValueError:
                 rel_path = ""
 
-            # Normalize preserved file paths for comparison
-            preserved = False
-            for pf in _PRESERVE_FILES:
-                if rel_path == pf.replace("\\", "/"):
-                    preserved = True
-                    break
-
+            preserved = any(
+                rel_path == pf.replace("\\", "/") for pf in _PRESERVE_FILES
+            )
             if preserved:
                 continue
 
             if item.is_dir():
                 self._merge_directory(item, dest_item)
             else:
-                shutil.copy2(item, dest_item)
+                self._safe_copy(item, dest_item)
 
         # Remove files in dest that aren't in the new version
-        # (but only files, not directories -- to be safe)
         if dest_dir.exists():
             for existing in dest_dir.iterdir():
                 if existing.name not in new_items and existing.is_file():
@@ -557,6 +620,23 @@ class AutoUpdater:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
 
+    def _verify_update(self) -> List[str]:
+        """Verify that critical files exist after update.
+
+        Returns:
+            List of missing critical files (empty = all good).
+        """
+        critical_files = [
+            "main.py",
+            "pyproject.toml",
+            "requirements.txt",
+        ]
+        missing = []
+        for f in critical_files:
+            if not (self.root / f).exists():
+                missing.append(f)
+        return missing
+
     def _install_requirements(self):
         """Install/update requirements after an update."""
         req_file = self.root / "requirements.txt"
@@ -565,14 +645,20 @@ class AutoUpdater:
 
         python = sys.executable
         try:
-            subprocess.run(
-                [python, "-m", "pip", "install", "-r", str(req_file), "-q"],
+            result = subprocess.run(
+                [python, "-m", "pip", "install", "-r", str(req_file), "-q",
+                 "--no-warn-script-location"],
                 cwd=str(self.root),
                 capture_output=True,
+                text=True,
                 timeout=120,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+            if result.returncode != 0:
+                log.warning("pip install failed (exit %d): %s", result.returncode, result.stderr[:500])
+        except subprocess.TimeoutExpired:
+            log.warning("pip install timed out after 120s")
+        except FileNotFoundError:
+            log.warning("Python executable not found for pip install")
 
     def _progress(self, message: str):
         """Send a progress update."""
