@@ -1,6 +1,6 @@
 [project]
 name = "spartus-live-dashboard"
-version = "1.1.0"
+version = "1.2.0"
 description = "AI-powered live trading dashboard for XAUUSD on MetaTrader 5"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
