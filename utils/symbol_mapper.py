@@ -1,9 +1,18 @@
 """Symbol name mapping between canonical names and broker-specific variants.
 
 Each broker may use different naming for the same instrument (e.g. US500
-vs SPX500 vs USA500IDXUSD).  This module provides a lookup mechanism so
-the MT5Bridge can resolve whichever symbol name the connected broker
-actually exposes.
+vs SPX500 vs USA500IDXUSD).  Brokers may also add suffixes for account
+types (e.g. XAUUSD+ for Raw ECN, XAUUSDm for micro, XAUUSDr for raw).
+
+This module provides a lookup mechanism so the MT5Bridge can resolve
+whichever symbol name the connected broker actually exposes.
+
+Resolution order:
+    1. Explicit config override (symbol_map in YAML)
+    2. Canonical name (e.g. "XAUUSD")
+    3. Known alternative names (e.g. "GOLD", "SILVER")
+    4. Automatic suffix detection (e.g. "XAUUSD+", "XAUUSDr", "XAUUSD.raw")
+       — tries all alternatives with suffixes too
 
 Usage:
     from utils.symbol_mapper import resolve_symbol, BROKER_ALTERNATIVES
@@ -11,7 +20,10 @@ Usage:
     mt5_name = resolve_symbol("US500", available_symbols)
 """
 
+import logging
 from typing import Dict, List, Optional, Set
+
+log = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
 # Default 1:1 mapping (canonical -> expected MT5 name)
@@ -31,11 +43,51 @@ SYMBOL_MAP_DEFAULT: Dict[str, str] = {
 BROKER_ALTERNATIVES: Dict[str, List[str]] = {
     "US500": ["SP500", "SPX500", "USA500", "USA500IDXUSD", "SP500m", "US500.cash"],
     "USOIL": ["WTI", "CL-OIL", "USOUSD", "LIGHTCMDUSD", "XTIUSD", "OIL.WTI"],
-    "XAUUSD": ["GOLD", "XAUUSDm"],
-    "EURUSD": ["EURUSDm"],
-    "XAGUSD": ["SILVER", "XAGUSDm"],
-    "USDJPY": ["USDJPYm"],
+    "XAUUSD": ["GOLD"],
+    "EURUSD": [],
+    "XAGUSD": ["SILVER"],
+    "USDJPY": [],
 }
+
+# ------------------------------------------------------------------
+# Common broker suffixes for different account types
+# The resolver tries each canonical/alternative name with these appended.
+# ------------------------------------------------------------------
+_BROKER_SUFFIXES: List[str] = [
+    "+",       # Vantage Raw ECN (XAUUSD+)
+    "m",       # Micro accounts (XAUUSDm)
+    "r",       # Raw accounts (XAUUSDr)
+    ".raw",    # Raw accounts (XAUUSD.raw)
+    ".pro",    # Pro accounts (XAUUSD.pro)
+    ".ecn",    # ECN accounts (XAUUSD.ecn)
+    ".",       # Some brokers use trailing dot
+    "_",       # Some brokers use underscore
+    ".sml",    # Small/mini accounts
+    "c",       # Cent accounts
+    ".std",    # Standard accounts
+    "#",       # CFD variants (XAUUSD#)
+    "-",       # Dash suffix
+]
+
+
+def _try_with_suffixes(
+    base_name: str,
+    available_symbols: Set[str],
+) -> Optional[str]:
+    """Try a base symbol name with all known broker suffixes.
+
+    Args:
+        base_name:         Symbol name without suffix (e.g. "XAUUSD")
+        available_symbols: Set of symbol names the MT5 terminal reports.
+
+    Returns:
+        The matching suffixed name if found, otherwise None.
+    """
+    for suffix in _BROKER_SUFFIXES:
+        candidate = base_name + suffix
+        if candidate in available_symbols:
+            return candidate
+    return None
 
 
 def resolve_symbol(
@@ -48,7 +100,9 @@ def resolve_symbol(
     Resolution order:
         1. Check the explicit *symbol_map* override (config.symbol_map).
         2. Check the canonical name itself.
-        3. Walk through BROKER_ALTERNATIVES looking for a match.
+        3. Try the canonical name with broker suffixes (+, m, r, .raw, etc.)
+        4. Walk through BROKER_ALTERNATIVES looking for exact matches.
+        5. Try each alternative with broker suffixes.
 
     Args:
         canonical:         Standardised name (e.g. "XAUUSD", "US500").
@@ -68,11 +122,24 @@ def resolve_symbol(
     if canonical in available_symbols:
         return canonical
 
-    # 3. Walk alternatives
+    # 3. Try canonical name with suffixes
+    suffixed = _try_with_suffixes(canonical, available_symbols)
+    if suffixed:
+        log.info("Symbol %s resolved via suffix: %s", canonical, suffixed)
+        return suffixed
+
+    # 4. Walk alternatives (exact match)
     alternatives = BROKER_ALTERNATIVES.get(canonical, [])
     for alt in alternatives:
         if alt in available_symbols:
             return alt
+
+    # 5. Try each alternative with suffixes
+    for alt in alternatives:
+        suffixed = _try_with_suffixes(alt, available_symbols)
+        if suffixed:
+            log.info("Symbol %s resolved via alternative+suffix: %s", canonical, suffixed)
+            return suffixed
 
     return None
 
