@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 :: ============================================================
 :: Spartus Live Trading Dashboard -- Windows Launcher
 :: ============================================================
@@ -21,33 +22,41 @@ set "PYTHON="
 if exist "python\python.exe" (
     set "PYTHON=python\python.exe"
     echo [OK] Using embedded Python: python\python.exe
-) else if exist "..\venv\Scripts\python.exe" (
+    goto :python_found
+)
+if exist "..\venv\Scripts\python.exe" (
     set "PYTHON=..\venv\Scripts\python.exe"
     echo [OK] Using project venv: ..\venv\Scripts\python.exe
-) else if exist "venv\Scripts\python.exe" (
+    goto :python_found
+)
+if exist "venv\Scripts\python.exe" (
     set "PYTHON=venv\Scripts\python.exe"
     echo [OK] Using local venv: venv\Scripts\python.exe
-) else (
-    where python >nul 2>&1
-    if %errorlevel%==0 (
-        set "PYTHON=python"
-        echo [OK] Using system Python
-    ) else (
-        echo.
-        echo [ERROR] Python not found. Run install.bat first.
-        echo         install.bat will download Python automatically.
-        echo.
-        pause
-        exit /b 1
-    )
+    goto :python_found
 )
 
+where python >nul 2>&1
+if !errorlevel!==0 (
+    set "PYTHON=python"
+    echo [OK] Using system Python
+    goto :python_found
+)
+
+echo.
+echo [ERROR] Python not found. Run install.bat first.
+echo         install.bat will download Python automatically.
+echo.
+pause
+exit /b 1
+
+:python_found
+
 :: ---- Validate Python version (3.10-3.12) ----
-%PYTHON% -c "import sys; v=sys.version_info; exit(0 if (3,10)<=v[:2]<=(3,12) else 1)" >nul 2>&1
-if %errorlevel% neq 0 (
+!PYTHON! -c "import sys; v=sys.version_info; exit(0 if (3,10)<=v[:2]<=(3,12) else 1)" >nul 2>&1
+if !errorlevel! neq 0 (
     echo.
     echo [ERROR] Python version not supported.
-    %PYTHON% --version
+    !PYTHON! --version
     echo.
     echo Spartus requires Python 3.10-3.12.
     echo Run install.bat to set up the correct version automatically.
@@ -60,30 +69,30 @@ if %errorlevel% neq 0 (
 echo.
 echo Checking dependencies...
 
-%PYTHON% -c "import torch; torch.zeros(1)" >nul 2>&1
-if %errorlevel% neq 0 (
+!PYTHON! -c "import torch; torch.zeros(1)" >nul 2>&1
+if !errorlevel! neq 0 (
     echo.
     echo [ERROR] PyTorch not working. Run install.bat to fix.
     pause
     exit /b 1
 )
 
-%PYTHON% -c "import PyQt6" >nul 2>&1
-if %errorlevel% neq 0 (
+!PYTHON! -c "import PyQt6" >nul 2>&1
+if !errorlevel! neq 0 (
     echo [ERROR] PyQt6 not installed. Run install.bat first.
     pause
     exit /b 1
 )
 
-%PYTHON% -c "import stable_baselines3" >nul 2>&1
-if %errorlevel% neq 0 (
+!PYTHON! -c "import stable_baselines3" >nul 2>&1
+if !errorlevel! neq 0 (
     echo [ERROR] stable-baselines3 not installed. Run install.bat first.
     pause
     exit /b 1
 )
 
-%PYTHON% -c "import MetaTrader5" >nul 2>&1
-if %errorlevel% neq 0 (
+!PYTHON! -c "import MetaTrader5" >nul 2>&1
+if !errorlevel! neq 0 (
     echo [WARN] MetaTrader5 not installed. MT5 features will be unavailable.
 )
 
@@ -115,11 +124,11 @@ echo ============================================================
 echo   SPARTUS LIVE TRADING DASHBOARD
 echo ============================================================
 echo.
-%PYTHON% main.py %*
+!PYTHON! main.py %*
 
 :: If dashboard closes with an error, pause so user can read it
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo.
-    echo [Dashboard exited with error code %errorlevel%]
+    echo [Dashboard exited with error code !errorlevel!]
     pause
 )
