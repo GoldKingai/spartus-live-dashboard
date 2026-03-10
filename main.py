@@ -23,6 +23,16 @@ BASE_DIR = Path(__file__).resolve().parent
 os.chdir(BASE_DIR)
 sys.path.insert(0, str(BASE_DIR))
 
+# IMPORTANT: Import torch BEFORE PyQt6 on Windows.
+# PyQt6 modifies the DLL search path when loaded, which can prevent
+# torch's c10.dll from finding its dependencies (WinError 1114).
+# Importing torch first ensures its DLLs are loaded while the default
+# search path is still intact.
+try:
+    import torch  # noqa: F401 — must load before PyQt6
+except ImportError:
+    pass
+
 # Ensure storage/logs directory exists BEFORE configuring file handler
 _log_dir = BASE_DIR / "storage" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
