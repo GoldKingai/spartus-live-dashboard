@@ -225,7 +225,29 @@ class LiveStatusTab(QWidget):
             setattr(self, attr_name, value_label)
             layout.addWidget(value_label, row_offset, 1)
 
-        layout.setRowStretch(len(detail_fields) + 1, 1)
+        # --- Protection status (separator + 4 fields) ---
+        prot_row = len(detail_fields) + 1
+        sep = QLabel("── Protection ──")
+        sep.setStyleSheet(
+            f"color: {C['label']}; font-size: 11px; background: transparent; border: none;"
+        )
+        sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(sep, prot_row, 0, 1, 2)
+
+        protection_fields = [
+            ("Stage:", "_lbl_prot_stage"),
+            ("R-Multiple:", "_lbl_prot_r"),
+            ("Locked P/L:", "_lbl_prot_locked"),
+            ("Trail:", "_lbl_prot_trail"),
+        ]
+
+        for row_offset, (label_text, attr_name) in enumerate(protection_fields, start=prot_row + 1):
+            layout.addWidget(_make_label(label_text), row_offset, 0)
+            value_label = _make_label("--", C["text"])
+            setattr(self, attr_name, value_label)
+            layout.addWidget(value_label, row_offset, 1)
+
+        layout.setRowStretch(prot_row + len(protection_fields) + 1, 1)
 
         return box
 
@@ -407,7 +429,9 @@ class LiveStatusTab(QWidget):
                 f"background: transparent; border: none;"
             )
             for attr in ("_lbl_entry", "_lbl_current", "_lbl_pnl",
-                         "_lbl_sl", "_lbl_tp", "_lbl_duration"):
+                         "_lbl_sl", "_lbl_tp", "_lbl_duration",
+                         "_lbl_prot_stage", "_lbl_prot_r",
+                         "_lbl_prot_locked", "_lbl_prot_trail"):
                 getattr(self, attr).setText("--")
                 getattr(self, attr).setStyleSheet(
                     f"color: {C['text']}; font-size: 13px; background: transparent; border: none;"
@@ -465,6 +489,76 @@ class LiveStatusTab(QWidget):
         duration = pos.get("duration_min")
         if duration is not None:
             self._lbl_duration.setText(f"{duration} min")
+
+        # --- Protection display ---
+        stage = pos.get("protection_stage", 0)
+        r_mult = pos.get("r_multiple", 0.0)
+        locked_pnl = pos.get("locked_pnl", 0.0)
+
+        # Stage label + color
+        stage_names = {0: "None", 1: "Breakeven", 2: "Lock Profit", 3: "ATR Trail"}
+        stage_colors = {0: C["label"], 1: C["text"], 2: C["green"], 3: "#00BFFF"}
+        stage_text = stage_names.get(stage, "None")
+        stage_color = stage_colors.get(stage, C["label"])
+        self._lbl_prot_stage.setText(stage_text)
+        self._lbl_prot_stage.setStyleSheet(
+            f"color: {stage_color}; font-size: 13px; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+
+        # R-Multiple (live — moves up/down with price)
+        if r_mult >= 1.0:
+            r_color = C["green"]
+        elif r_mult > 0:
+            r_color = C["text"]
+        else:
+            r_color = C["red"]
+        self._lbl_prot_r.setText(f"{r_mult:+.2f} R")
+        self._lbl_prot_r.setStyleSheet(
+            f"color: {r_color}; font-size: 13px; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+
+        # Locked P/L
+        if stage >= 1 and locked_pnl > 0:
+            self._lbl_prot_locked.setText(currency.fmt_signed(locked_pnl))
+            self._lbl_prot_locked.setStyleSheet(
+                f"color: {C['green']}; font-size: 13px; font-weight: bold; "
+                f"background: transparent; border: none;"
+            )
+        elif stage >= 1:
+            self._lbl_prot_locked.setText("BE (£0)")
+            self._lbl_prot_locked.setStyleSheet(
+                f"color: {C['text']}; font-size: 13px; background: transparent; border: none;"
+            )
+        else:
+            self._lbl_prot_locked.setText("--")
+            self._lbl_prot_locked.setStyleSheet(
+                f"color: {C['text']}; font-size: 13px; background: transparent; border: none;"
+            )
+
+        # Trail status
+        if stage == 3:
+            self._lbl_prot_trail.setText("Active ▲")
+            self._lbl_prot_trail.setStyleSheet(
+                f"color: #00BFFF; font-size: 13px; font-weight: bold; "
+                f"background: transparent; border: none;"
+            )
+        elif stage > 0:
+            next_stage = {1: "Lock", 2: "Trail"}
+            next_r = {1: pos.get("lock_trigger_r", 1.5), 2: pos.get("trail_trigger_r", 2.0)}
+            nxt = next_stage.get(stage, "")
+            nxt_r = next_r.get(stage, 0)
+            self._lbl_prot_trail.setText(f"Next: {nxt} at {nxt_r:.1f}R")
+            self._lbl_prot_trail.setStyleSheet(
+                f"color: {C['label']}; font-size: 13px; background: transparent; border: none;"
+            )
+        else:
+            be_r = pos.get("be_trigger_r", 1.0)
+            self._lbl_prot_trail.setText(f"BE triggers at {be_r:.1f}R")
+            self._lbl_prot_trail.setStyleSheet(
+                f"color: {C['label']}; font-size: 13px; background: transparent; border: none;"
+            )
 
     def _update_summary(self, today: dict) -> None:
         """Update today's trading summary panel."""

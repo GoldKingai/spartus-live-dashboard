@@ -28,7 +28,7 @@ symbol_map:
 # --- Risk -------------------------------------------------------------------
 risk:
   max_risk_pct: 0.02          # Max 2% of equity per trade
-  max_dd: 0.10                # 10% total drawdown limit
+  max_dd: 0.20                # 20% total drawdown limit (small account needs room)
   max_daily_dd: 0.03          # 3% daily drawdown limit
   daily_trade_soft_cap: 10    # After this many trades, conviction must exceed 0.6
   daily_trade_hard_cap: 50    # Absolute max trades per day (demo, use 20 for live)
@@ -128,7 +128,7 @@ observation:
 post_rounding:
   enable_post_rounding_risk_cap: true
   post_rounding_risk_cap: 1.5
-  absolute_risk_cap_pct: 0.10  # Raised from 0.03: allows min-lot at £100 (training has no cap)
+  absolute_risk_cap_pct: 0.16  # Raised from 0.10: allows min-lot at £50 with ATR 3-4 (loss ~12-15%)
 
 # --- Daily reset ------------------------------------------------------------
 daily_reset_utc_hour: 0

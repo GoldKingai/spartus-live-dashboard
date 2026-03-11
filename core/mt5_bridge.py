@@ -379,6 +379,7 @@ class MT5Bridge:
                     "tp": pos.tp,
                     "profit": pos.profit,
                     "swap": pos.swap,
+                    "price_current": pos.price_current,
                     "time": datetime.fromtimestamp(pos.time, tz=timezone.utc),
                     "magic": pos.magic,
                     "comment": pos.comment,

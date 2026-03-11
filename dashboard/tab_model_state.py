@@ -28,9 +28,9 @@ light gray (#b1bac4) labels -- NEVER dark gray on dark backgrounds.
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QGroupBox, QLabel,
+    QGroupBox, QLabel, QDoubleSpinBox, QPushButton,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from dashboard.theme import C
@@ -75,6 +75,11 @@ class ModelStateTab(QWidget):
     Call ``update_data(data)`` each tick with the latest state dict.
     """
 
+    # Emitted when user clicks Save in AI Trade Protection section.
+    # Dict keys: be_trigger_r, be_buffer_pips, lock_trigger_r,
+    #            lock_amount_r, trail_trigger_r, trail_atr_mult
+    ai_protection_save_requested = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -88,13 +93,14 @@ class ModelStateTab(QWidget):
             f"QSplitter::handle {{ background-color: {C['border']}; width: 2px; }}"
         )
 
-        # Left pane: Model Info (top) + Last Action (bottom)
+        # Left pane: Model Info (top) + Last Action (mid) + AI Protection (bottom)
         left_pane = QWidget()
         left_layout = QVBoxLayout(left_pane)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
-        left_layout.addWidget(self._build_model_info_box(), stretch=3)
+        left_layout.addWidget(self._build_model_info_box(), stretch=2)
         left_layout.addWidget(self._build_last_action_box(), stretch=2)
+        left_layout.addWidget(self._build_ai_protection_box(), stretch=4)
 
         # Right pane: Feature Health + Correlated Feeds + Calendar + Reward
         right_pane = QWidget()
@@ -174,6 +180,165 @@ class ModelStateTab(QWidget):
         layout.setRowStretch(len(action_fields), 1)
         layout.setColumnStretch(1, 1)
         return box
+
+    # ------------------------------------------------------------------
+    # 2b. AI TRADE PROTECTION (user-adjustable)
+    # ------------------------------------------------------------------
+
+    def _build_ai_protection_box(self) -> QGroupBox:
+        """Panel with spinboxes for AI trade protection settings."""
+        box = QGroupBox("AI TRADE PROTECTION")
+        layout = QGridLayout(box)
+        layout.setContentsMargins(12, 20, 12, 12)
+        layout.setSpacing(6)
+
+        row = 0
+
+        # Section label: Breakeven
+        lbl_be = _make_label("BREAKEVEN", C["cyan"], bold=True, font_size=11)
+        layout.addWidget(lbl_be, row, 0, 1, 3)
+        row += 1
+
+        layout.addWidget(_make_label("Trigger:"), row, 0)
+        self._spin_ai_be_trigger = self._make_protection_spin(0.1, 3.0, 1.0, "R")
+        layout.addWidget(self._spin_ai_be_trigger, row, 1)
+        layout.addWidget(_make_label("R profit to move SL to BE",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        layout.addWidget(_make_label("Buffer:"), row, 0)
+        self._spin_ai_be_buffer = self._make_protection_spin(0.0, 2.0, 0.5, "pips")
+        layout.addWidget(self._spin_ai_be_buffer, row, 1)
+        layout.addWidget(_make_label("pips above entry for BE",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        # Section label: Profit Lock
+        lbl_lock = _make_label("PROFIT LOCK", C["cyan"], bold=True, font_size=11)
+        layout.addWidget(lbl_lock, row, 0, 1, 3)
+        row += 1
+
+        layout.addWidget(_make_label("Trigger:"), row, 0)
+        self._spin_ai_lock_trigger = self._make_protection_spin(0.5, 5.0, 1.5, "R")
+        layout.addWidget(self._spin_ai_lock_trigger, row, 1)
+        layout.addWidget(_make_label("R profit to lock in gains",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        layout.addWidget(_make_label("Lock:"), row, 0)
+        self._spin_ai_lock_amount = self._make_protection_spin(0.1, 3.0, 0.5, "R")
+        layout.addWidget(self._spin_ai_lock_amount, row, 1)
+        layout.addWidget(_make_label("R guaranteed profit",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        # Section label: Trailing Stop
+        lbl_trail = _make_label("TRAILING STOP", C["cyan"], bold=True, font_size=11)
+        layout.addWidget(lbl_trail, row, 0, 1, 3)
+        row += 1
+
+        layout.addWidget(_make_label("Trigger:"), row, 0)
+        self._spin_ai_trail_trigger = self._make_protection_spin(0.5, 5.0, 2.0, "R")
+        layout.addWidget(self._spin_ai_trail_trigger, row, 1)
+        layout.addWidget(_make_label("R profit to start trailing",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        layout.addWidget(_make_label("Distance:"), row, 0)
+        self._spin_ai_trail_atr = self._make_protection_spin(0.3, 3.0, 1.0, "ATR")
+        layout.addWidget(self._spin_ai_trail_atr, row, 1)
+        layout.addWidget(_make_label("ATR multiplier for trail",
+                                     C["subtext"], font_size=11), row, 2)
+        row += 1
+
+        # Save button + status
+        btn_row = QHBoxLayout()
+        self._btn_ai_save = QPushButton("Save AI Protection")
+        self._btn_ai_save.setFixedHeight(30)
+        self._btn_ai_save.setStyleSheet(
+            f"QPushButton {{ background: {C['bg']}; color: {C['cyan']}; "
+            f"border: 1px solid {C['cyan']}; border-radius: 4px; "
+            f"font-size: 12px; font-weight: bold; padding: 4px 16px; }}"
+            f"QPushButton:hover {{ background: {C['cyan']}; color: {C['bg']}; }}"
+        )
+        self._btn_ai_save.clicked.connect(self._on_ai_save_clicked)
+        btn_row.addWidget(self._btn_ai_save)
+
+        self._lbl_ai_save_status = _make_label("", C["subtext"], font_size=11)
+        btn_row.addWidget(self._lbl_ai_save_status)
+        btn_row.addStretch()
+
+        layout.addLayout(btn_row, row, 0, 1, 3)
+        row += 1
+
+        layout.setRowStretch(row, 1)
+        layout.setColumnStretch(2, 1)
+        return box
+
+    def _make_protection_spin(self, lo: float, hi: float, default: float,
+                              suffix: str) -> QDoubleSpinBox:
+        """Create a styled spinbox for AI protection settings."""
+        spin = QDoubleSpinBox()
+        spin.setRange(lo, hi)
+        spin.setSingleStep(0.1)
+        spin.setDecimals(1)
+        spin.setValue(default)
+        spin.setSuffix(f" {suffix}")
+        spin.setFixedWidth(100)
+        spin.setStyleSheet(
+            f"QDoubleSpinBox {{ background: {C['bg']}; color: {C['text']}; "
+            f"border: 1px solid {C['border']}; border-radius: 3px; "
+            f"padding: 2px 4px; font-size: 12px; }}"
+            f"QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ "
+            f"background: {C['border']}; }}"
+        )
+        spin.valueChanged.connect(self._on_ai_setting_changed)
+        return spin
+
+    def _on_ai_setting_changed(self) -> None:
+        """Mark AI protection settings as unsaved."""
+        self._lbl_ai_save_status.setText("(unsaved changes)")
+        self._lbl_ai_save_status.setStyleSheet(
+            f"color: {C['yellow']}; font-size: 11px; "
+            f"background: transparent; border: none;"
+        )
+
+    def _on_ai_save_clicked(self) -> None:
+        """Emit AI protection settings for persistence."""
+        settings = self.get_ai_protection_settings()
+        self.ai_protection_save_requested.emit(settings)
+        self._lbl_ai_save_status.setText("Settings saved")
+        self._lbl_ai_save_status.setStyleSheet(
+            f"color: {C['green']}; font-size: 11px; "
+            f"background: transparent; border: none;"
+        )
+
+    def get_ai_protection_settings(self) -> dict:
+        """Return current AI protection spinbox values as a dict."""
+        return {
+            "be_trigger_r": self._spin_ai_be_trigger.value(),
+            "be_buffer_pips": self._spin_ai_be_buffer.value(),
+            "lock_trigger_r": self._spin_ai_lock_trigger.value(),
+            "lock_amount_r": self._spin_ai_lock_amount.value(),
+            "trail_trigger_r": self._spin_ai_trail_trigger.value(),
+            "trail_atr_mult": self._spin_ai_trail_atr.value(),
+        }
+
+    def load_ai_protection_settings(self, settings: dict) -> None:
+        """Load AI protection values into spinboxes (blocks signals)."""
+        mapping = {
+            "be_trigger_r": self._spin_ai_be_trigger,
+            "be_buffer_pips": self._spin_ai_be_buffer,
+            "lock_trigger_r": self._spin_ai_lock_trigger,
+            "lock_amount_r": self._spin_ai_lock_amount,
+            "trail_trigger_r": self._spin_ai_trail_trigger,
+            "trail_atr_mult": self._spin_ai_trail_atr,
+        }
+        for key, spin in mapping.items():
+            if key in settings:
+                spin.blockSignals(True)
+                spin.setValue(float(settings[key]))
+                spin.blockSignals(False)
 
     # ------------------------------------------------------------------
     # 3. FEATURE HEALTH

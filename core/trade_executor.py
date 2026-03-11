@@ -236,15 +236,74 @@ class TradeExecutor:
             "open_time": pos.get("time", datetime.now(timezone.utc)),
         }
         self._entry_step = self._step_count
-        self._initial_sl = pos.get("sl", 0)
         self._initial_tp = pos.get("tp", 0)
-        self._max_favorable = 0.0
+
+        # --- Reconstruct protection state from MT5 position ---
+        entry = pos["price_open"]
+        current_sl = pos.get("sl", 0)
+        current_price = pos.get("price_current", entry)
+
+        # Estimate max_favorable from current price (minimum — will grow
+        # on next bar via _update_max_favorable if price moves further).
+        if side == "LONG":
+            self._max_favorable = max(0.0, current_price - entry)
+        else:
+            self._max_favorable = max(0.0, entry - current_price)
+
+        # Infer initial SL and protection stage from how far SL has moved.
+        # If SL has been tightened toward entry (LONG: SL > original,
+        # SHORT: SL < original), protection must have been active before
+        # the restart.  We use config thresholds to infer the stage.
+        sl_moved_toward_entry = False
+        if side == "LONG" and current_sl > entry:
+            sl_moved_toward_entry = True  # SL above entry = at least BE
+        elif side == "SHORT" and 0 < current_sl < entry:
+            sl_moved_toward_entry = True  # SL below entry = at least BE
+
+        if sl_moved_toward_entry:
+            # SL already moved past entry — initial_sl was somewhere worse.
+            # We can't know the original, so set it to current SL (safe:
+            # protection will still fire from current stage onward).
+            # Estimate R-distance from the TP placement if available.
+            tp = pos.get("tp", 0)
+            if tp > 0:
+                if side == "LONG":
+                    self._initial_sl = entry - (tp - entry)  # Mirror TP distance
+                else:
+                    self._initial_sl = entry + (entry - tp)
+            else:
+                # Fallback: use 2x ATR as estimated initial SL distance
+                self._initial_sl = (
+                    entry - 2.0 * self._current_atr if side == "LONG"
+                    else entry + 2.0 * self._current_atr
+                )
+
+            # Infer stage from SL position relative to entry
+            r_dist = abs(entry - self._initial_sl)
+            if r_dist > 0:
+                if side == "LONG":
+                    sl_profit = current_sl - entry
+                else:
+                    sl_profit = entry - current_sl
+                locked_r = sl_profit / r_dist
+                if locked_r >= self._config.protection_lock_amount_r:
+                    self._protection_stage = 2  # Lock or higher
+                else:
+                    self._protection_stage = 1  # Breakeven
+            else:
+                self._protection_stage = 1
+        else:
+            # SL hasn't moved past entry — use it as initial SL
+            self._initial_sl = current_sl
+            self._protection_stage = 0
 
         log.warning(
             "RECOVERED position from MT5: ticket=%d %s %.3f lots @ %.2f "
-            "SL=%.2f TP=%.2f  (will manage with conviction=0.5)",
+            "SL=%.2f TP=%.2f  initial_sl=%.2f max_fav=%.4f stage=%d "
+            "(will manage with conviction=0.5)",
             pos["ticket"], side, pos["volume"], pos["price_open"],
             pos.get("sl", 0), pos.get("tp", 0),
+            self._initial_sl, self._max_favorable, self._protection_stage,
         )
         return True
 
@@ -820,14 +879,14 @@ class TradeExecutor:
 
         # --- Apply profit protection first, then AI trailing SL ---
         atr = self._current_atr
-        current_sl = pos["sl"]
+        mt5_sl = pos["sl"]  # The SL currently on the broker (MT5)
 
         # Profit protection (rule-based staged SL floor)
         protection_sl, new_stage = self._risk.apply_profit_protection(
             position={
                 "side": pos["side"],
                 "entry_price": pos["entry_price"],
-                "stop_loss": current_sl,
+                "stop_loss": mt5_sl,
                 "initial_sl": self._initial_sl,
                 "max_favorable": self._max_favorable,
                 "protection_stage": self._protection_stage,
@@ -845,47 +904,54 @@ class TradeExecutor:
                 "PROTECT: ticket=%d  stage %d->%d  R=%.2f  "
                 "sl %.2f -> %.2f  side=%s",
                 pos["ticket"], self._protection_stage, new_stage,
-                r_current, current_sl, protection_sl, pos["side"],
+                r_current, mt5_sl, protection_sl, pos["side"],
             )
             self._log_protection_event(pos, new_stage, protection_sl, r_current)
         self._protection_stage = new_stage
-        current_sl = protection_sl
-        pos["sl"] = current_sl
 
         # AI trailing SL (can only tighten beyond protection floor)
         new_sl = self._risk.adjust_stop_loss(
-            current_sl=current_sl,
+            current_sl=protection_sl,
             side=pos["side"],
             current_price=current_price,
             atr=atr,
             sl_adjustment=sl_adjustment,
         )
 
-        # Only modify if the SL actually moved (avoid unnecessary API calls)
-        # Use tick_size as threshold so it scales to any instrument
+        # The final SL is the tighter of AI trail and protection floor.
+        # For LONG: higher SL is tighter. For SHORT: lower SL is tighter.
+        if pos["side"] == "LONG":
+            final_sl = max(new_sl, protection_sl)
+        else:
+            final_sl = min(new_sl, protection_sl)
+
+        # Compare final SL against the ACTUAL MT5 SL (not the protection floor).
+        # This ensures protection-only moves (without AI trail) still get sent.
         sym_info = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
         tick_size = sym_info.get("tick_size", 0.01) or 0.01
         sl_changed = False
-        if pos["side"] == "LONG" and new_sl > current_sl + tick_size:
+        if pos["side"] == "LONG" and final_sl > mt5_sl + tick_size:
             sl_changed = True
-        elif pos["side"] == "SHORT" and new_sl < current_sl - tick_size:
+        elif pos["side"] == "SHORT" and final_sl < mt5_sl - tick_size:
             sl_changed = True
 
         if sl_changed:
             success = self._bridge.modify_position(
                 ticket=pos["ticket"],
-                sl=new_sl,
+                sl=final_sl,
             )
             if success:
-                old_sl = pos["sl"]
-                pos["sl"] = new_sl
+                pos["sl"] = final_sl
+
+                # Determine reason: protection stage or AI trail
+                reason = f"stage_{self._protection_stage}" if final_sl == protection_sl else "ai_trail"
 
                 # Record SL modification for trade history
                 self._sl_modifications.append({
                     "bar": self._step_count,
-                    "old_sl": round(old_sl, 2),
-                    "new_sl": round(new_sl, 2),
-                    "reason": f"stage_{self._protection_stage}" if new_stage > 0 else "ai_trail",
+                    "old_sl": round(mt5_sl, 2),
+                    "new_sl": round(final_sl, 2),
+                    "reason": reason,
                     "price": round(current_price, 2),
                 })
 
@@ -893,18 +959,18 @@ class TradeExecutor:
                 mt5_side = "BUY" if pos["side"] == "LONG" else "SELL"
                 sl_pnl = self._bridge.calc_profit(
                     mt5_side, self._config.mt5_symbol,
-                    pos["lots"], pos["entry_price"], new_sl,
+                    pos["lots"], pos["entry_price"], final_sl,
                 )
                 sl_pnl_str = f"  SL_pnl={sl_pnl:.2f}" if sl_pnl is not None else ""
 
                 log.info(
                     "TRAIL_SL: ticket=%d  %s  sl %.2f -> %.2f  "
-                    "sl_adj=%.3f  bars_held=%d%s",
+                    "reason=%s  sl_adj=%.3f  bars_held=%d%s",
                     pos["ticket"], pos["side"],
-                    current_sl, new_sl, sl_adjustment, bars_held,
+                    mt5_sl, final_sl, reason, sl_adjustment, bars_held,
                     sl_pnl_str,
                 )
-                return f"TRAIL_SL_{new_sl:.2f}"
+                return f"TRAIL_SL_{final_sl:.2f}"
 
         return "HOLD"
 

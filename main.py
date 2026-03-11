@@ -612,6 +612,15 @@ class SpartusOrchestrator:
         container_4 = self._dashboard.get_tab("MODEL & FEATURES")
         self._tab_model_state = ModelStateTab()
         container_4.layout().addWidget(self._tab_model_state)
+        # Load AI protection settings from config
+        self._tab_model_state.load_ai_protection_settings({
+            "be_trigger_r": self._config.protection_be_trigger_r,
+            "be_buffer_pips": self._config.protection_be_buffer_pips,
+            "lock_trigger_r": self._config.protection_lock_trigger_r,
+            "lock_amount_r": self._config.protection_lock_amount_r,
+            "trail_trigger_r": self._config.protection_trail_trigger_r,
+            "trail_atr_mult": self._config.protection_trail_atr_mult,
+        })
 
         # Tab 5: Alerts & Safety
         container_5 = self._dashboard.get_tab("ALERTS & SAFETY")
@@ -690,6 +699,11 @@ class SpartusOrchestrator:
         )
         self._tab_settings.save_settings_requested.connect(
             self._on_save_settings
+        )
+
+        # Tab 4 (ModelStateTab) AI protection save
+        self._tab_model_state.ai_protection_save_requested.connect(
+            self._on_save_ai_protection
         )
 
         # Tab 8 (UpdatesTab) signals
@@ -1016,6 +1030,16 @@ class SpartusOrchestrator:
         # Save to user_settings.json
         path = self._config.save_user_settings()
         self._add_alert("INFO", f"Settings saved to {path.name}")
+
+    def _on_save_ai_protection(self, settings: dict) -> None:
+        """Persist AI trade protection settings to disk."""
+        for key, value in settings.items():
+            config_key = f"protection_{key}"
+            if hasattr(self._config, config_key):
+                setattr(self._config, config_key, value)
+
+        path = self._config.save_user_settings()
+        self._add_alert("INFO", f"AI protection settings saved to {path.name}")
 
     def _handle_emergency_stop(self) -> None:
         """Called by MT5Bridge heartbeat when connection is lost."""
@@ -1741,6 +1765,34 @@ class SpartusOrchestrator:
             else:
                 duration = 0.0
 
+            # Protection metrics
+            initial_sl = self._executor._initial_sl
+            r_distance = abs(entry - initial_sl) if initial_sl > 0 else 0.0
+            prot_stage = self._executor._protection_stage
+
+            # Current R-multiple (live, based on current price — moves up/down)
+            if r_distance > 0 and current_price > 0:
+                if pos["side"] == "LONG":
+                    current_move = current_price - entry
+                else:
+                    current_move = entry - current_price
+                r_multiple = current_move / r_distance
+            else:
+                r_multiple = 0.0
+
+            # Locked P/L: how much the current SL guarantees
+            current_sl = pos.get("sl", 0.0)
+            if prot_stage >= 1 and current_sl > 0 and tick_size > 0:
+                if pos["side"] == "LONG":
+                    locked_move = current_sl - entry
+                else:
+                    locked_move = entry - current_sl
+                locked_pnl = round(
+                    (locked_move / tick_size) * tick_value * lots, 2
+                )
+            else:
+                locked_pnl = 0.0
+
             position_data = {
                 "side": pos["side"],
                 "lots": lots,
@@ -1750,7 +1802,13 @@ class SpartusOrchestrator:
                 "sl": pos.get("sl", 0.0),
                 "tp": pos.get("tp", 0.0),
                 "duration_min": int(duration),
-                "trailing": pos.get("sl", 0) != self._executor._initial_sl,
+                "trailing": pos.get("sl", 0) != initial_sl,
+                "protection_stage": prot_stage,
+                "r_multiple": round(r_multiple, 2),
+                "locked_pnl": locked_pnl,
+                "be_trigger_r": self._config.protection_be_trigger_r,
+                "lock_trigger_r": self._config.protection_lock_trigger_r,
+                "trail_trigger_r": self._config.protection_trail_trigger_r,
             }
 
         # Today's summary — sourced from the database so data persists

@@ -27,6 +27,13 @@ _USER_SAVEABLE_FIELDS = {
     "manual_lock_amount_r",
     "manual_trail_trigger_r",
     "manual_trail_atr_mult",
+    # AI trade protection (user-adjustable from Model & Features tab)
+    "protection_be_trigger_r",
+    "protection_be_buffer_pips",
+    "protection_lock_trigger_r",
+    "protection_lock_amount_r",
+    "protection_trail_trigger_r",
+    "protection_trail_atr_mult",
 }
 
 
