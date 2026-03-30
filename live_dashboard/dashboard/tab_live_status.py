@@ -183,7 +183,7 @@ class LiveStatusTab(QWidget):
         box = QGroupBox("ACCOUNT")
         layout = QGridLayout(box)
         layout.setContentsMargins(12, 20, 12, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         fields = [
             ("Currency:", "_lbl_currency"),
@@ -194,8 +194,8 @@ class LiveStatusTab(QWidget):
         ]
 
         for row, (label_text, attr_name) in enumerate(fields):
-            layout.addWidget(_make_label(label_text), row, 0)
-            value_label = _make_label("--", C["text"])
+            layout.addWidget(_make_label(label_text, font_size=15), row, 0)
+            value_label = _make_label("--", C["text"], font_size=15)
             setattr(self, attr_name, value_label)
             layout.addWidget(value_label, row, 1)
 
@@ -316,7 +316,7 @@ class LiveStatusTab(QWidget):
         box = QGroupBox("TODAY'S SUMMARY")
         layout = QGridLayout(box)
         layout.setContentsMargins(12, 20, 12, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         fields = [
             ("Trades:", "_lbl_trades"),
@@ -327,8 +327,8 @@ class LiveStatusTab(QWidget):
         ]
 
         for row, (label_text, attr_name) in enumerate(fields):
-            layout.addWidget(_make_label(label_text), row, 0)
-            value_label = _make_label("--", C["text"])
+            layout.addWidget(_make_label(label_text, font_size=15), row, 0)
+            value_label = _make_label("--", C["text"], font_size=15)
             setattr(self, attr_name, value_label)
             layout.addWidget(value_label, row, 1)
 
@@ -471,7 +471,7 @@ class LiveStatusTab(QWidget):
             if value is not None:
                 lbl.setText(currency.fmt(value))
                 lbl.setStyleSheet(
-                    f"color: {C['text']}; font-size: 13px; background: transparent; border: none;"
+                    f"color: {C['text']}; font-size: 15px; background: transparent; border: none;"
                 )
             else:
                 lbl.setText("--")
@@ -616,10 +616,8 @@ class LiveStatusTab(QWidget):
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
             dist_to_be = be_gbp - pnl
-            if dist_to_be > 0:
-                self._lbl_be_stat.setText(f"→ {_fmt_gbp(dist_to_be)} away")
-            else:
-                self._lbl_be_stat.setText("(pending...)")
+            be_stat_txt = f"→ {_fmt_gbp(dist_to_be)} away" if dist_to_be > 0 else "(nearly there...)"
+            self._lbl_be_stat.setText(be_stat_txt)
             self._lbl_be_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
             )
@@ -656,11 +654,8 @@ class LiveStatusTab(QWidget):
             self._lbl_lock_thresh.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
-            if stage >= 1:
-                dist_to_lock = lock_gbp - pnl
-                stat_txt = f"→ {_fmt_gbp(dist_to_lock)} away" if dist_to_lock > 0 else "(pending...)"
-            else:
-                stat_txt = ""
+            dist_to_lock = lock_gbp - pnl
+            stat_txt = f"→ {_fmt_gbp(dist_to_lock)} away" if dist_to_lock > 0 else "(nearly there...)"
             self._lbl_lock_stat.setText(stat_txt)
             self._lbl_lock_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
@@ -697,11 +692,8 @@ class LiveStatusTab(QWidget):
             self._lbl_trail_thresh.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
-            if stage >= 2:
-                dist_to_trail = trail_gbp - pnl
-                stat_txt = f"→ {_fmt_gbp(dist_to_trail)} away" if dist_to_trail > 0 else "(pending...)"
-            else:
-                stat_txt = ""
+            dist_to_trail = trail_gbp - pnl
+            stat_txt = f"→ {_fmt_gbp(dist_to_trail)} away" if dist_to_trail > 0 else "(nearly there...)"
             self._lbl_trail_stat.setText(stat_txt)
             self._lbl_trail_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
@@ -750,7 +742,7 @@ class LiveStatusTab(QWidget):
             pnl_color = C["green"] if pnl >= 0 else C["red"]
             self._lbl_day_pnl.setText(currency.fmt_signed(pnl))
             self._lbl_day_pnl.setStyleSheet(
-                f"color: {pnl_color}; font-size: 13px; font-weight: bold; "
+                f"color: {pnl_color}; font-size: 15px; font-weight: bold; "
                 f"background: transparent; border: none;"
             )
 
@@ -765,7 +757,7 @@ class LiveStatusTab(QWidget):
             dd_color = C["red"] if max_dd > 3.0 else C["yellow"] if max_dd > 1.5 else C["text"]
             self._lbl_max_dd.setText(f"{max_dd:.1f}%")
             self._lbl_max_dd.setStyleSheet(
-                f"color: {dd_color}; font-size: 13px; background: transparent; border: none;"
+                f"color: {dd_color}; font-size: 15px; background: transparent; border: none;"
             )
 
         # Profit Factor
@@ -774,7 +766,7 @@ class LiveStatusTab(QWidget):
             pf_color = C["green"] if pf >= 1.5 else C["text"] if pf >= 1.0 else C["red"]
             self._lbl_pf.setText(f"{pf:.2f}")
             self._lbl_pf.setStyleSheet(
-                f"color: {pf_color}; font-size: 13px; background: transparent; border: none;"
+                f"color: {pf_color}; font-size: 15px; background: transparent; border: none;"
             )
 
     def _update_decisions(self, decisions: list[dict]) -> None:

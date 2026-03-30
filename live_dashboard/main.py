@@ -1749,35 +1749,47 @@ class SpartusOrchestrator:
         pos = self._executor.get_position() if self._executor else None
         position_data = None
         if pos:
-            current_price = 0.0
-            bars = self._mt5_bridge.get_latest_bars(
-                self._config.mt5_symbol,
-                mt5.TIMEFRAME_M5 if mt5 else 5,
-                1,
-            )
-            if not bars.empty:
-                current_price = float(bars["close"].iloc[-1])
-
-            # Use MT5's own profit figure when available (sync_position stores it).
-            # This is always correct regardless of fill_price issues.
             entry = pos["entry_price"]
             lots = pos["lots"]
             sym_info = self._mt5_bridge.get_symbol_info()
             tick_value = sym_info.get("tick_value", 0.745)
             tick_size = sym_info.get("tick_size", 0.01)
 
-            mt5_profit = pos.get("mt5_profit")
-            if mt5_profit is not None:
-                pnl = mt5_profit
-            elif current_price > 0 and entry > 0:
-                price_move = (
-                    (current_price - entry) if pos["side"] == "LONG"
-                    else (entry - current_price)
+            # --- Live P&L + current price: query MT5 positions directly every 1s ---
+            # sync_position() only runs every 5 min (on new bar), so mt5_profit is
+            # stale for dashboard purposes. We read the live position from MT5 here.
+            current_price = 0.0
+            pnl = 0.0
+            ticket = pos.get("ticket", 0)
+            if mt5 and ticket:
+                try:
+                    live_positions = mt5.positions_get(ticket=ticket)
+                    if live_positions:
+                        lp = live_positions[0]
+                        pnl = float(lp.profit)
+                        current_price = float(lp.price_current)
+                except Exception:
+                    pass
+
+            # Fallback: stale mt5_profit then price-based estimate
+            if current_price == 0.0:
+                mt5_profit = pos.get("mt5_profit")
+                if mt5_profit is not None:
+                    pnl = mt5_profit
+                bars = self._mt5_bridge.get_latest_bars(
+                    self._config.mt5_symbol,
+                    mt5.TIMEFRAME_M5 if mt5 else 5,
+                    1,
                 )
-                ticks = price_move / tick_size if tick_size > 0 else 0.0
-                pnl = ticks * tick_value * lots
-            else:
-                pnl = 0.0
+                if not bars.empty:
+                    current_price = float(bars["close"].iloc[-1])
+                if current_price > 0 and entry > 0 and mt5_profit is None:
+                    price_move = (
+                        (current_price - entry) if pos["side"] == "LONG"
+                        else (entry - current_price)
+                    )
+                    ticks = price_move / tick_size if tick_size > 0 else 0.0
+                    pnl = ticks * tick_value * lots
 
             # Duration from open_time stored by executor
             open_time = pos.get("open_time")
