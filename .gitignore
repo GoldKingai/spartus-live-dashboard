@@ -1,3 +1,21 @@
+# ---------------------------------------------------------------
+# IMPORTANT: This repo contains ONLY live_dashboard/
+# All training code, src/, scripts/, spartusbench/, tests/ are
+# private and must never be committed.
+# ---------------------------------------------------------------
+src/
+scripts/
+spartusbench/
+tests/
+data/
+storage/
+requirements.txt
+*.md
+*.bat
+*.ps1
+*.sh
+*.png
+
 # Python
 __pycache__/
 *.py[cod]
@@ -62,6 +80,9 @@ nul
 # Env files
 .env
 *.env
+
+# Claude AI internal settings (never commit)
+.claude/
 
 # Temp
 *.tmp
