@@ -501,32 +501,35 @@ class LiveRiskManager:
 
         new_stage = max(stage, target_stage)
 
-        # Calculate protection floor
-        if new_stage >= 3:
-            min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
-            trail = max(trail_atr * atr, min_trail_atr * atr)
-            if side == "LONG":
-                floor_sl = current_price - trail
-            else:
-                floor_sl = current_price + trail
-        elif new_stage == 2:
-            lock_dist = lock_amount * r_distance
-            if side == "LONG":
-                floor_sl = entry + lock_dist
-            else:
-                floor_sl = entry - lock_dist
-        elif new_stage == 1:
-            if side == "LONG":
-                floor_sl = entry + be_buffer
-            else:
-                floor_sl = entry - be_buffer
-        else:
+        if new_stage == 0:
             return current_sl, new_stage
 
-        # Only tighten
+        # Calculate the most protective floor across ALL active stages up to
+        # new_stage.  Without this, if all thresholds fire at once (common with
+        # GBP thresholds on small-lot trades), only the stage-3 ATR trail floor
+        # is computed.  The trail can be looser than the stage-1/2 floors when
+        # ATR is large relative to MFE, which leaves the SL unmoved even though
+        # stages 1 and 2 would have tightened it.
+        lock_dist = lock_amount * r_distance
+        min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
+
         if side == "LONG":
+            # LONG: higher SL = tighter.  Accumulate from stage 1 upward.
+            floor_sl = entry + be_buffer
+            if new_stage >= 2:
+                floor_sl = max(floor_sl, entry + lock_dist)
+            if new_stage >= 3:
+                trail = max(trail_atr * atr, min_trail_atr * atr)
+                floor_sl = max(floor_sl, current_price - trail)
             new_sl = max(floor_sl, current_sl)
         else:
+            # SHORT: lower SL = tighter.  Accumulate from stage 1 upward.
+            floor_sl = entry - be_buffer
+            if new_stage >= 2:
+                floor_sl = min(floor_sl, entry - lock_dist)
+            if new_stage >= 3:
+                trail = max(trail_atr * atr, min_trail_atr * atr)
+                floor_sl = min(floor_sl, current_price + trail)
             new_sl = min(floor_sl, current_sl)
 
         return new_sl, new_stage
@@ -631,32 +634,29 @@ class LiveRiskManager:
 
         new_stage = max(stage, target_stage)
 
-        # Calculate protection floor
-        if new_stage >= 3:
-            min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
-            trail = max(trail_atr * atr, min_trail_atr * atr)
-            if side == "LONG":
-                floor_sl = current_price - trail
-            else:
-                floor_sl = current_price + trail
-        elif new_stage == 2:
-            lock_dist = lock_amount * r_distance
-            if side == "LONG":
-                floor_sl = entry + lock_dist
-            else:
-                floor_sl = entry - lock_dist
-        elif new_stage == 1:
-            if side == "LONG":
-                floor_sl = entry + be_buffer
-            else:
-                floor_sl = entry - be_buffer
-        else:
+        if new_stage == 0:
             return current_sl, new_stage
 
-        # Only tighten
+        # Same cumulative-best-floor logic as apply_profit_protection.
+        # See that method's comment for the full explanation.
+        lock_dist = lock_amount * r_distance
+        min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
+
         if side == "LONG":
+            floor_sl = entry + be_buffer
+            if new_stage >= 2:
+                floor_sl = max(floor_sl, entry + lock_dist)
+            if new_stage >= 3:
+                trail = max(trail_atr * atr, min_trail_atr * atr)
+                floor_sl = max(floor_sl, current_price - trail)
             new_sl = max(floor_sl, current_sl)
         else:
+            floor_sl = entry - be_buffer
+            if new_stage >= 2:
+                floor_sl = min(floor_sl, entry - lock_dist)
+            if new_stage >= 3:
+                trail = max(trail_atr * atr, min_trail_atr * atr)
+                floor_sl = min(floor_sl, current_price + trail)
             new_sl = min(floor_sl, current_sl)
 
         return new_sl, new_stage
