@@ -258,15 +258,26 @@ class LiveStatusTab(QWidget):
         outer.addLayout(badge_row)
 
         # --- Three protection stage rows ---
-        # Each row: big dot | stage name | threshold | status
+        # Columns: dot | name | LOCKED badge | threshold | status
         stage_grid = QGridLayout()
         stage_grid.setContentsMargins(0, 0, 0, 0)
-        stage_grid.setHorizontalSpacing(12)
+        stage_grid.setHorizontalSpacing(10)
         stage_grid.setVerticalSpacing(14)
-        stage_grid.setColumnStretch(3, 1)
+        stage_grid.setColumnStretch(4, 1)   # status stretches
+
+        def _make_locked_badge() -> QLabel:
+            """Green pill badge shown when a stage is active."""
+            lbl = QLabel("  LOCKED  ")
+            lbl.setStyleSheet(
+                "background: #1a6b35; color: #40e080; font-weight: bold; "
+                "font-size: 12px; border-radius: 4px; padding: 2px 6px; "
+                "border: 1px solid #40e080;"
+            )
+            lbl.setVisible(False)
+            return lbl
 
         def _add_stage_row(row: int, dot_attr: str, name_attr: str,
-                           thresh_attr: str, stat_attr: str) -> None:
+                           locked_attr: str, thresh_attr: str, stat_attr: str) -> None:
             dot = QLabel("○")
             dot.setStyleSheet(
                 f"color: {C['label']}; font-size: 22px; background: transparent; border: none;"
@@ -280,17 +291,21 @@ class LiveStatusTab(QWidget):
             setattr(self, name_attr, name_lbl)
             stage_grid.addWidget(name_lbl, row, 1)
 
+            locked_badge = _make_locked_badge()
+            setattr(self, locked_attr, locked_badge)
+            stage_grid.addWidget(locked_badge, row, 2)
+
             thresh_lbl = _make_label("--", C["subtext"], font_size=14)
             setattr(self, thresh_attr, thresh_lbl)
-            stage_grid.addWidget(thresh_lbl, row, 2)
+            stage_grid.addWidget(thresh_lbl, row, 3)
 
             stat_lbl = _make_label("", C["subtext"], font_size=13)
             setattr(self, stat_attr, stat_lbl)
-            stage_grid.addWidget(stat_lbl, row, 3)
+            stage_grid.addWidget(stat_lbl, row, 4)
 
-        _add_stage_row(0, "_dot_be",    "_lbl_be_name",    "_lbl_be_thresh",    "_lbl_be_stat")
-        _add_stage_row(1, "_dot_lock",  "_lbl_lock_name",  "_lbl_lock_thresh",  "_lbl_lock_stat")
-        _add_stage_row(2, "_dot_trail", "_lbl_trail_name", "_lbl_trail_thresh", "_lbl_trail_stat")
+        _add_stage_row(0, "_dot_be",    "_lbl_be_name",    "_lbl_be_locked",    "_lbl_be_thresh",    "_lbl_be_stat")
+        _add_stage_row(1, "_dot_lock",  "_lbl_lock_name",  "_lbl_lock_locked",  "_lbl_lock_thresh",  "_lbl_lock_stat")
+        _add_stage_row(2, "_dot_trail", "_lbl_trail_name", "_lbl_trail_locked", "_lbl_trail_thresh", "_lbl_trail_stat")
 
         outer.addLayout(stage_grid)
 
@@ -507,6 +522,10 @@ class LiveStatusTab(QWidget):
                     dot.setStyleSheet(
                         f"color: {C['label']}; font-size: 22px; background: transparent; border: none;"
                     )
+            for locked_attr in ("_lbl_be_locked", "_lbl_lock_locked", "_lbl_trail_locked"):
+                badge = getattr(self, locked_attr, None)
+                if badge:
+                    badge.setVisible(False)
             self._lbl_stage_badge.setText("Stage 0 / 3  ○○○")
             self._lbl_stage_badge.setStyleSheet(
                 f"color: {C['label']}; font-size: 13px; font-weight: bold; "
@@ -563,18 +582,31 @@ class LiveStatusTab(QWidget):
 
         # --- Protection Progress (displayed in the standalone AI TRADE PROTECTION box) ---
         stage = pos.get("protection_stage", 0)
-        be_gbp = pos.get("be_trigger_gbp", 2.0)
-        lock_gbp = pos.get("lock_trigger_gbp", 3.0)
-        lock_amount_gbp = pos.get("lock_amount_gbp", 1.5)
-        trail_gbp = pos.get("trail_trigger_gbp", 4.0)
-        trail_atr = pos.get("trail_atr_mult", 1.0)
+        r_distance = pos.get("r_distance", 0.0)        # initial SL distance in points
+        r_multiple = pos.get("r_multiple", 0.0)        # current R (live)
+        be_r = pos.get("be_trigger_r", 1.0)
+        lock_r = pos.get("lock_trigger_r", 1.5)
+        lock_amt_r = pos.get("lock_amount_r", 0.5)
+        trail_r = pos.get("trail_trigger_r", 2.0)
+        trail_atr = pos.get("trail_atr_mult", 1.5)
         locked_pnl = pos.get("locked_pnl", 0.0)
 
-        def _fmt_gbp(v: float) -> str:
-            return currency.fmt(v)
+        def _fmt_r(r: float) -> str:
+            """Format R threshold as points if r_distance known, else as R."""
+            if r_distance > 0:
+                pts = r * r_distance
+                return f"+{pts:.1f} pts  ({r:.1f}R)"
+            return f"+{r:.1f}R"
 
-        _GREEN = C["green"]   # All triggered stages glow green
-        _GRAY  = C["label"]   # Untriggered / inactive
+        def _fmt_r_dist(r: float) -> str:
+            """Distance remaining to an R threshold."""
+            if r_distance > 0:
+                pts_needed = (r - r_multiple) * r_distance
+                return f"{pts_needed:.1f} pts away"
+            return f"{(r - r_multiple):.2f}R away"
+
+        _GREEN = C["green"]
+        _GRAY  = C["label"]
 
         # Stage badge
         badge_color = _GREEN if stage > 0 else _GRAY
@@ -585,6 +617,7 @@ class LiveStatusTab(QWidget):
         )
 
         # Stage 1: Breakeven
+        self._lbl_be_locked.setVisible(stage >= 1)
         if stage >= 1:
             self._dot_be.setText("●")
             self._dot_be.setStyleSheet(
@@ -594,11 +627,11 @@ class LiveStatusTab(QWidget):
             self._lbl_be_name.setStyleSheet(
                 f"color: {_GREEN}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_be_thresh.setText(f"at +{_fmt_gbp(be_gbp)}")
+            self._lbl_be_thresh.setText(f"at {_fmt_r(be_r)}")
             self._lbl_be_thresh.setStyleSheet(
                 f"color: {C['text']}; font-size: 14px; background: transparent; border: none;"
             )
-            self._lbl_be_stat.setText("✓ SL at entry")
+            self._lbl_be_stat.setText("SL at entry")
             self._lbl_be_stat.setStyleSheet(
                 f"color: {_GREEN}; font-size: 13px; background: transparent; border: none;"
             )
@@ -611,18 +644,18 @@ class LiveStatusTab(QWidget):
             self._lbl_be_name.setStyleSheet(
                 f"color: {_GRAY}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_be_thresh.setText(f"at +{_fmt_gbp(be_gbp)}")
+            self._lbl_be_thresh.setText(f"at {_fmt_r(be_r)}")
             self._lbl_be_thresh.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
-            dist_to_be = be_gbp - pnl
-            be_stat_txt = f"→ {_fmt_gbp(dist_to_be)} away" if dist_to_be > 0 else "(nearly there...)"
-            self._lbl_be_stat.setText(be_stat_txt)
+            be_stat_txt = _fmt_r_dist(be_r) if r_multiple < be_r else "(nearly there...)"
+            self._lbl_be_stat.setText(f"-> {be_stat_txt}")
             self._lbl_be_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
             )
 
         # Stage 2: Profit Lock
+        self._lbl_lock_locked.setVisible(stage >= 2)
         if stage >= 2:
             self._dot_lock.setText("●")
             self._dot_lock.setStyleSheet(
@@ -632,12 +665,13 @@ class LiveStatusTab(QWidget):
             self._lbl_lock_name.setStyleSheet(
                 f"color: {_GREEN}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_lock_thresh.setText(f"at +{_fmt_gbp(lock_gbp)}")
+            self._lbl_lock_thresh.setText(f"at {_fmt_r(lock_r)}")
             self._lbl_lock_thresh.setStyleSheet(
                 f"color: {C['text']}; font-size: 14px; background: transparent; border: none;"
             )
-            locked_display = currency.fmt(locked_pnl) if locked_pnl > 0 else _fmt_gbp(lock_amount_gbp)
-            self._lbl_lock_stat.setText(f"✓ locked {locked_display}")
+            lock_pts = lock_amt_r * r_distance if r_distance > 0 else 0.0
+            locked_display = currency.fmt(locked_pnl) if locked_pnl > 0 else f"{lock_pts:.1f} pts"
+            self._lbl_lock_stat.setText(f"locked {locked_display}")
             self._lbl_lock_stat.setStyleSheet(
                 f"color: {_GREEN}; font-size: 13px; background: transparent; border: none;"
             )
@@ -650,18 +684,19 @@ class LiveStatusTab(QWidget):
             self._lbl_lock_name.setStyleSheet(
                 f"color: {_GRAY}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_lock_thresh.setText(f"at +{_fmt_gbp(lock_gbp)}  (locks {_fmt_gbp(lock_amount_gbp)})")
+            lock_pts = lock_amt_r * r_distance if r_distance > 0 else 0.0
+            self._lbl_lock_thresh.setText(f"at {_fmt_r(lock_r)}  (locks {lock_pts:.1f} pts)")
             self._lbl_lock_thresh.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
-            dist_to_lock = lock_gbp - pnl
-            stat_txt = f"→ {_fmt_gbp(dist_to_lock)} away" if dist_to_lock > 0 else "(nearly there...)"
-            self._lbl_lock_stat.setText(stat_txt)
+            lock_stat_txt = _fmt_r_dist(lock_r) if r_multiple < lock_r else "(nearly there...)"
+            self._lbl_lock_stat.setText(f"-> {lock_stat_txt}")
             self._lbl_lock_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
             )
 
         # Stage 3: Trailing Stop
+        self._lbl_trail_locked.setVisible(stage >= 3)
         if stage >= 3:
             self._dot_trail.setText("●")
             self._dot_trail.setStyleSheet(
@@ -671,11 +706,11 @@ class LiveStatusTab(QWidget):
             self._lbl_trail_name.setStyleSheet(
                 f"color: {_GREEN}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_trail_thresh.setText(f"at +{_fmt_gbp(trail_gbp)}")
+            self._lbl_trail_thresh.setText(f"at {_fmt_r(trail_r)}")
             self._lbl_trail_thresh.setStyleSheet(
                 f"color: {C['text']}; font-size: 14px; background: transparent; border: none;"
             )
-            self._lbl_trail_stat.setText(f"✓ Active  ({trail_atr:.1f}× ATR)")
+            self._lbl_trail_stat.setText(f"Active  ({trail_atr:.1f}x ATR)")
             self._lbl_trail_stat.setStyleSheet(
                 f"color: {_GREEN}; font-size: 13px; background: transparent; border: none;"
             )
@@ -688,35 +723,38 @@ class LiveStatusTab(QWidget):
             self._lbl_trail_name.setStyleSheet(
                 f"color: {_GRAY}; font-size: 17px; font-weight: bold; background: transparent; border: none;"
             )
-            self._lbl_trail_thresh.setText(f"at +{_fmt_gbp(trail_gbp)}  ({trail_atr:.1f}× ATR)")
+            self._lbl_trail_thresh.setText(f"at {_fmt_r(trail_r)}  ({trail_atr:.1f}x ATR)")
             self._lbl_trail_thresh.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 14px; background: transparent; border: none;"
             )
-            dist_to_trail = trail_gbp - pnl
-            stat_txt = f"→ {_fmt_gbp(dist_to_trail)} away" if dist_to_trail > 0 else "(nearly there...)"
-            self._lbl_trail_stat.setText(stat_txt)
+            trail_stat_txt = _fmt_r_dist(trail_r) if r_multiple < trail_r else "(nearly there...)"
+            self._lbl_trail_stat.setText(f"-> {trail_stat_txt}")
             self._lbl_trail_stat.setStyleSheet(
                 f"color: {C['subtext']}; font-size: 13px; background: transparent; border: none;"
             )
 
         # --- Summary line ---
+        lock_pts = lock_amt_r * r_distance if r_distance > 0 else 0.0
+        trail_pts = trail_r * r_distance if r_distance > 0 else 0.0
         if stage >= 3:
-            summary_txt = f"Trailing active  |  Min guaranteed: {currency.fmt(locked_pnl) if locked_pnl > 0 else '?'}"
+            min_g = currency.fmt(locked_pnl) if locked_pnl > 0 else f"{lock_pts:.1f} pts"
+            summary_txt = f"Trailing active  |  Min guaranteed: {min_g}"
             summary_color = _GREEN
         elif stage == 2:
-            dist_to_t = trail_gbp - pnl
-            summary_txt = f"Profit locked: {currency.fmt(locked_pnl) if locked_pnl > 0 else _fmt_gbp(lock_amount_gbp)}  |  Trail in {_fmt_gbp(max(dist_to_t, 0))}"
+            pts_to_trail = max((trail_r - r_multiple) * r_distance, 0.0) if r_distance > 0 else 0.0
+            min_g = currency.fmt(locked_pnl) if locked_pnl > 0 else f"{lock_pts:.1f} pts"
+            summary_txt = f"Profit locked: {min_g}  |  Trail in {pts_to_trail:.1f} pts"
             summary_color = _GREEN
         elif stage == 1:
-            dist_to_l = lock_gbp - pnl
-            summary_txt = f"BE active  |  Lock profit in {_fmt_gbp(max(dist_to_l, 0))}"
+            pts_to_lock = max((lock_r - r_multiple) * r_distance, 0.0) if r_distance > 0 else 0.0
+            summary_txt = f"BE active  |  Lock profit in {pts_to_lock:.1f} pts"
             summary_color = _GREEN
-        elif pnl >= 0:
-            dist_to_b = be_gbp - pnl
-            summary_txt = f"Next: Breakeven in {_fmt_gbp(max(dist_to_b, 0))}"
+        elif r_multiple >= 0:
+            pts_to_be = max((be_r - r_multiple) * r_distance, 0.0) if r_distance > 0 else 0.0
+            summary_txt = f"Next: Breakeven in {pts_to_be:.1f} pts  (R = {r_multiple:.2f}/{be_r:.1f})"
             summary_color = C["label"]
         else:
-            summary_txt = f"P/L: {currency.fmt_signed(pnl)}  |  BE triggers at +{_fmt_gbp(be_gbp)}"
+            summary_txt = f"R = {r_multiple:.2f}  |  BE triggers at +{be_r:.1f}R"
             summary_color = C["label"]
 
         self._lbl_prot_summary.setText(summary_txt)
