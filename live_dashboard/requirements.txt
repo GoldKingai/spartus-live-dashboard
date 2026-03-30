@@ -1,0 +1,20 @@
+# Spartus Live Trading Dashboard - Dependencies
+MetaTrader5>=5.0.45
+PyQt6>=6.5
+pyqtgraph>=0.13
+numpy>=1.24
+pandas>=2.0
+stable-baselines3>=2.1
+ta>=0.11
+PyYAML>=6.0
+
+# PyTorch -- install ONE of the following BEFORE pip install -r requirements.txt:
+#
+#   CPU only (recommended, works on any machine):
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+#   CUDA 12.4 (only if you have an NVIDIA GPU with CUDA 12.4 drivers):
+#     pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# If you see "[WinError 1114] c10.dll" errors, you have the wrong torch
+# variant installed. Uninstall and reinstall with the CPU command above.

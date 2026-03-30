@@ -1,51 +1,68 @@
-# =============================================================================
-# Spartus Live Trading Dashboard -- .gitignore
-# =============================================================================
-
-# --- Python ---
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+*.pyd
 *.egg-info/
 dist/
 build/
-*.egg
+.eggs/
 
-# --- Virtual environments ---
+# Virtual environment
 venv/
 .venv/
 env/
 
-# --- IDE ---
+# Storage — runtime data, logs, models, caches
+storage/logs/
+storage/memory/
+storage/models/
+storage/features/
+storage/data/
+storage/state/
+storage/benchmark/
+storage/finetune/
+storage/reports/
+storage/training_state.json
+
+# Keep user settings (intentional persisted config)
+!storage/
+
+# Live dashboard config overrides (user-specific)
+live_dashboard/config/user_settings.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
+*.suo
+*.user
 
-# --- Runtime storage (regenerated at startup) ---
-# Ignore contents but keep directory structure via .gitkeep
-storage/logs/*
-storage/memory/*
-storage/state/*
-storage/screenshots/*
-storage/reports/weekly/*
-!storage/reports/weekly/.gitkeep
-storage/models/*.zip
-storage/models/*.meta.json
-
-# --- Deployed model binaries (large, not version-controlled) ---
-model/*.zip
-model/*.meta.json
-
-# Keep .gitkeep files
-!storage/**/.gitkeep
-
-# --- OS files ---
-Thumbs.db
-Desktop.ini
+# OS
 .DS_Store
+Thumbs.db
+nul
 
-# --- Environment / secrets ---
+# Logs
+*.log
+*.jsonl
+
+# Model files (large binaries)
+*.zip
+*.pt
+*.pth
+*.pkl
+
+# Parquet data files
+*.parquet
+
+# Env files
 .env
 *.env
-credentials.json
+
+# Temp
+*.tmp
+*.bak

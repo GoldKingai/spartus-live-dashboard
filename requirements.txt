@@ -1,20 +1,25 @@
-# Spartus Live Trading Dashboard - Dependencies
+# Data acquisition
 MetaTrader5>=5.0.45
-PyQt6>=6.5
-pyqtgraph>=0.13
-numpy>=1.24
-pandas>=2.0
-stable-baselines3>=2.1
-ta>=0.11
-PyYAML>=6.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+requests>=2.31.0
 
-# PyTorch -- install ONE of the following BEFORE pip install -r requirements.txt:
-#
-#   CPU only (recommended, works on any machine):
-#     pip install torch --index-url https://download.pytorch.org/whl/cpu
-#
-#   CUDA 12.4 (only if you have an NVIDIA GPU with CUDA 12.4 drivers):
-#     pip install torch --index-url https://download.pytorch.org/whl/cu124
-#
-# If you see "[WinError 1114] c10.dll" errors, you have the wrong torch
-# variant installed. Uninstall and reinstall with the CPU command above.
+# Utilities
+tqdm>=4.65.0
+python-dateutil>=2.8.2
+
+# RL Core (torch installed separately with CUDA)
+stable-baselines3>=2.6.0
+gymnasium>=0.29.0
+
+# Indicators & Feature Engineering
+pandas-ta>=0.3.14b
+fracdiff>=0.9.0
+
+# Dashboard & Monitoring
+rich>=13.0.0
+tensorboard>=2.14.0
+psutil>=5.9.0
+PyQt6>=6.5
+matplotlib>=3.7.0
