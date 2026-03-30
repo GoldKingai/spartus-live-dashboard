@@ -1373,6 +1373,92 @@ class TradeExecutor:
             self._max_favorable = favorable
 
     # ------------------------------------------------------------------
+    # Intrabar protection check (called every 5 seconds between bars)
+    # ------------------------------------------------------------------
+
+    def check_ai_protection_intrabar(self, current_price: float, atr: float) -> Optional[str]:
+        """Check and apply AI profit protection between M5 bars.
+
+        Called every 5 seconds so protection fires within seconds of the
+        threshold being hit, not at the next bar close (up to 5 min later).
+
+        Updates _max_favorable from the live price, then calls
+        apply_profit_protection exactly as execute_action does.
+
+        Returns a status string if stage advanced, else None.
+        """
+        pos = self._position
+        if pos is None or current_price <= 0:
+            return None
+        if self._initial_sl <= 0 or abs(self._initial_sl - pos["entry_price"]) < 0.01:
+            return None
+
+        # Update max favorable from current live price
+        if pos["side"] == "LONG":
+            live_fav = current_price - pos["entry_price"]
+        else:
+            live_fav = pos["entry_price"] - current_price
+        if live_fav > self._max_favorable:
+            self._max_favorable = live_fav
+
+        mt5_sl = pos.get("sl", self._initial_sl)
+
+        protection_sl, new_stage = self._risk.apply_profit_protection(
+            position={
+                "side": pos["side"],
+                "entry_price": pos["entry_price"],
+                "stop_loss": mt5_sl,
+                "initial_sl": self._initial_sl,
+                "max_favorable": self._max_favorable,
+                "protection_stage": self._protection_stage,
+                "r_value_gbp": self._r_value_gbp,
+            },
+            current_price=current_price,
+            atr=atr,
+            spread_points=self._bar_spread * 0.01,
+        )
+
+        sym_info = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+        tick_size = sym_info.get("tick_size", 0.01) or 0.01
+
+        sl_changed = False
+        if pos["side"] == "LONG" and protection_sl > mt5_sl + tick_size:
+            sl_changed = True
+        elif pos["side"] == "SHORT" and protection_sl < mt5_sl - tick_size:
+            sl_changed = True
+
+        if not sl_changed and new_stage <= self._protection_stage:
+            return None
+
+        if sl_changed:
+            success = self._bridge.modify_position(
+                ticket=pos["ticket"],
+                sl=round(protection_sl, 2),
+            )
+            if success:
+                pos["sl"] = protection_sl
+                log.info(
+                    "INTRABAR PROTECT: ticket=%d stage %d→%d SL %.2f→%.2f",
+                    pos["ticket"], self._protection_stage, new_stage,
+                    mt5_sl, protection_sl,
+                )
+            else:
+                log.warning(
+                    "INTRABAR PROTECT: SL modify failed ticket=%d", pos["ticket"]
+                )
+                return None
+
+        if new_stage > self._protection_stage:
+            stage_names = {1: "BREAKEVEN", 2: "PROFIT_LOCK", 3: "TRAILING"}
+            r_distance = abs(pos["entry_price"] - self._initial_sl)
+            r_current = self._max_favorable / r_distance if r_distance > 0 else 0.0
+            self._log_protection_event(pos, new_stage, protection_sl, r_current)
+            self._protection_stage = new_stage
+            return f"PROTECT_STAGE_{new_stage}_{stage_names.get(new_stage, '')}"
+
+        return None
+
+    # ------------------------------------------------------------------
     # Protection event logging
     # ------------------------------------------------------------------
 

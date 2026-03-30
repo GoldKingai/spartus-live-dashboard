@@ -953,18 +953,8 @@ class SpartusOrchestrator:
         try:
             if self._executor is None or self._mt5_bridge is None:
                 return
-            if not self._config.manage_manual_trades:
-                return
 
-            # Scan for new manual positions
-            adopted = self._executor.scan_manual_trades()
-            if adopted > 0:
-                self._add_alert(
-                    "INFO",
-                    f"Adopted {adopted} manual position(s) for SL management",
-                )
-
-            # Get current price for protection calculations
+            # Get live tick price (needed by both AI protection and manual mgmt)
             current_price = 0.0
             bar_high = 0.0
             bar_low = 0.0
@@ -982,16 +972,35 @@ class SpartusOrchestrator:
             if self._pipeline is not None:
                 atr = self._pipeline.get_current_atr() or 1.0
 
-            # Apply protection
-            manual_results = self._executor.manage_manual_positions(
-                current_price=current_price,
-                atr=atr,
-                bar_high=bar_high,
-                bar_low=bar_low,
-            )
-            for mr in manual_results:
-                if "TRAIL" in mr or "PROTECT" in mr:
-                    self._add_alert("INFO", f"Manual trade: {mr}")
+            # --- AI trade protection (intrabar, every 5 seconds) ---
+            # This fires protection stages as soon as thresholds are hit,
+            # not at the next M5 bar close (which could be 5 minutes away).
+            if self._executor.has_position():
+                prot_result = self._executor.check_ai_protection_intrabar(
+                    current_price=current_price,
+                    atr=atr,
+                )
+                if prot_result:
+                    self._add_alert("INFO", f"AI protection triggered: {prot_result}")
+
+            # --- Manual trade management ---
+            if self._config.manage_manual_trades:
+                adopted = self._executor.scan_manual_trades()
+                if adopted > 0:
+                    self._add_alert(
+                        "INFO",
+                        f"Adopted {adopted} manual position(s) for SL management",
+                    )
+
+                manual_results = self._executor.manage_manual_positions(
+                    current_price=current_price,
+                    atr=atr,
+                    bar_high=bar_high,
+                    bar_low=bar_low,
+                )
+                for mr in manual_results:
+                    if "TRAIL" in mr or "PROTECT" in mr:
+                        self._add_alert("INFO", f"Manual trade: {mr}")
         except Exception:
             log.exception("Error in manual trade loop")
 
