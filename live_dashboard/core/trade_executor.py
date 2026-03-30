@@ -203,6 +203,7 @@ class TradeExecutor:
             "protection_stage": self._protection_stage,
             "entry_price": self._position["entry_price"],
             "side": self._position["side"],
+            "r_value_gbp": self._r_value_gbp,
             "saved_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
@@ -304,6 +305,19 @@ class TradeExecutor:
             self._initial_sl = saved["initial_sl"]
             self._max_favorable = saved["max_favorable"]
             self._protection_stage = saved["protection_stage"]
+            # Restore r_value_gbp so GBP-based thresholds work after restart
+            self._r_value_gbp = saved.get("r_value_gbp", 0.0)
+            # Fallback: recompute r_value_gbp from MT5 symbol info if missing
+            # (handles old protection_state.json files that predate this field)
+            if self._r_value_gbp == 0.0 and self._initial_sl > 0:
+                _sym_rec = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+                _tick_sz_rec = _sym_rec.get("tick_size", 0.01) or 0.01
+                _tick_val_rec = _sym_rec.get("tick_value", 0.745)
+                _lots_rec = pos.get("volume", 0.01)
+                _r_dist_rec = abs(entry - self._initial_sl)
+                if _r_dist_rec > 0:
+                    self._r_value_gbp = (_r_dist_rec / _tick_sz_rec) * _tick_val_rec * _lots_rec
+                    log.info("Recomputed r_value_gbp=%.4f from symbol info (old state file)", self._r_value_gbp)
             # max_favorable might have grown since last save -- update
             # with current price as a floor
             if side == "LONG":
@@ -313,9 +327,9 @@ class TradeExecutor:
             self._max_favorable = max(self._max_favorable, live_fav)
             log.info(
                 "RECOVERED protection state from disk: ticket=%d "
-                "initial_sl=%.2f max_fav=%.4f stage=%d",
+                "initial_sl=%.2f max_fav=%.4f stage=%d r_val_gbp=%.4f",
                 pos["ticket"], self._initial_sl,
-                self._max_favorable, self._protection_stage,
+                self._max_favorable, self._protection_stage, self._r_value_gbp,
             )
         else:
             # Fallback: estimate from current MT5 position state
@@ -360,10 +374,18 @@ class TradeExecutor:
                 self._initial_sl = current_sl
                 self._protection_stage = 0
 
+            # Compute r_value_gbp from symbol info (no saved state)
+            _sym_fb = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+            _tick_sz_fb = _sym_fb.get("tick_size", 0.01) or 0.01
+            _tick_val_fb = _sym_fb.get("tick_value", 0.745)
+            _lots_fb = pos.get("volume", 0.01)
+            _r_dist_fb = abs(entry - self._initial_sl)
+            if _r_dist_fb > 0:
+                self._r_value_gbp = (_r_dist_fb / _tick_sz_fb) * _tick_val_fb * _lots_fb
             log.warning(
                 "No persisted protection state -- estimated from MT5: "
-                "initial_sl=%.2f max_fav=%.4f stage=%d",
-                self._initial_sl, self._max_favorable, self._protection_stage,
+                "initial_sl=%.2f max_fav=%.4f stage=%d r_val_gbp=%.4f",
+                self._initial_sl, self._max_favorable, self._protection_stage, self._r_value_gbp,
             )
 
         # Guard: if initial_sl is 0 or equals entry, protection is disabled
