@@ -470,15 +470,39 @@ class MT5Bridge:
             log.error("send_market_order: %s", msg)
             return {"success": False, "ticket": None, "fill_price": None, "error": msg}
 
+        fill_price = result.price
+
+        # Some brokers return price=0 in the order result even on success.
+        # Fall back to the actual open price from the MT5 position.
+        if fill_price == 0.0:
+            import time as _time
+            _time.sleep(0.1)  # brief wait for MT5 to register the position
+            positions = mt5.positions_get(ticket=result.order)
+            if positions:
+                fill_price = positions[0].price_open
+                log.info(
+                    "fill_price was 0 from result -- fetched from position: %.2f",
+                    fill_price,
+                )
+            if fill_price == 0.0:
+                # Last resort: use current bid/ask
+                tick = mt5.symbol_info_tick(symbol)
+                if tick:
+                    fill_price = tick.ask if side.upper() == "BUY" else tick.bid
+                    log.warning(
+                        "fill_price still 0 -- using current tick price: %.2f",
+                        fill_price,
+                    )
+
         log.info(
             "Order filled: ticket=%d fill_price=%.2f",
             result.order,
-            result.price,
+            fill_price,
         )
         return {
             "success": True,
             "ticket": result.order,
-            "fill_price": result.price,
+            "fill_price": fill_price,
             "error": None,
         }
 
