@@ -614,11 +614,11 @@ class SpartusOrchestrator:
         container_4.layout().addWidget(self._tab_model_state)
         # Load AI protection settings from config
         self._tab_model_state.load_ai_protection_settings({
-            "be_trigger_gbp": self._config.protection_be_trigger_gbp,
+            "be_trigger_r": self._config.protection_be_trigger_r,
             "be_buffer_pips": self._config.protection_be_buffer_pips,
-            "lock_trigger_gbp": self._config.protection_lock_trigger_gbp,
-            "lock_amount_gbp": self._config.protection_lock_amount_gbp,
-            "trail_trigger_gbp": self._config.protection_trail_trigger_gbp,
+            "lock_trigger_r": self._config.protection_lock_trigger_r,
+            "lock_amount_r": self._config.protection_lock_amount_r,
+            "trail_trigger_r": self._config.protection_trail_trigger_r,
             "trail_atr_mult": self._config.protection_trail_atr_mult,
         })
 
@@ -640,10 +640,10 @@ class SpartusOrchestrator:
         self._tab_settings.set_enabled(self._config.manage_manual_trades)
         # Load manual protection settings from config
         self._tab_settings.load_protection_settings({
-            "be_trigger_gbp": self._config.manual_be_trigger_gbp,
-            "lock_trigger_gbp": self._config.manual_lock_trigger_gbp,
-            "lock_amount_gbp": self._config.manual_lock_amount_gbp,
-            "trail_trigger_gbp": self._config.manual_trail_trigger_gbp,
+            "be_trigger_r": self._config.manual_be_trigger_r,
+            "lock_trigger_r": self._config.manual_lock_trigger_r,
+            "lock_amount_r": self._config.manual_lock_amount_r,
+            "trail_trigger_r": self._config.manual_trail_trigger_r,
             "trail_atr_mult": self._config.manual_trail_atr_mult,
         })
 
@@ -1024,25 +1024,29 @@ class SpartusOrchestrator:
         """Handle protection settings change from Manual Trade tab."""
         if self._executor is not None:
             self._executor.set_manual_protection_overrides(overrides)
-        be = overrides.get("be_trigger_gbp", "?")
-        lock = overrides.get("lock_trigger_gbp", "?")
-        lock_amt = overrides.get("lock_amount_gbp", "?")
-        trail = overrides.get("trail_trigger_gbp", "?")
+        be = overrides.get("be_trigger_r", "?")
+        lock = overrides.get("lock_trigger_r", "?")
+        lock_amt = overrides.get("lock_amount_r", "?")
+        trail = overrides.get("trail_trigger_r", "?")
         atr = overrides.get("trail_atr_mult", "?")
         self._add_alert(
             "INFO",
-            f"Manual protection updated: BE=£{be} Lock=£{lock}/£{lock_amt} Trail=£{trail} @ {atr}x ATR",
+            f"Manual protection updated: BE={be}R Lock={lock}R/{lock_amt}R Trail={trail}R @ {atr}x ATR",
         )
 
     def _on_save_settings(self, settings: dict) -> None:
         """Persist user settings to disk so they survive restarts."""
+        _key_map = {
+            "manage_manual_trades": "manage_manual_trades",
+            "be_trigger_r":    "manual_be_trigger_r",
+            "lock_trigger_r":  "manual_lock_trigger_r",
+            "lock_amount_r":   "manual_lock_amount_r",
+            "trail_trigger_r": "manual_trail_trigger_r",
+            "trail_atr_mult":  "manual_trail_atr_mult",
+            "be_buffer_pips":  "manual_be_buffer_pips",
+        }
         for key, value in settings.items():
-            if key == "manage_manual_trades":
-                config_key = key
-            elif key == "trail_atr_mult":
-                config_key = "manual_trail_atr_mult"
-            else:
-                config_key = f"manual_{key}"
+            config_key = _key_map.get(key, f"manual_{key}")
             if hasattr(self._config, config_key):
                 setattr(self._config, config_key, value)
             elif hasattr(self._config, key):
@@ -1054,13 +1058,16 @@ class SpartusOrchestrator:
     def _on_save_ai_protection(self, settings: dict) -> None:
         """Persist AI trade protection settings to disk."""
         for key, value in settings.items():
-            # Map UI key → config field
-            if key == "be_buffer_pips":
-                config_key = "protection_be_buffer_pips"
-            elif key == "trail_atr_mult":
-                config_key = "protection_trail_atr_mult"
-            else:
-                config_key = f"protection_{key}"
+            # Map UI key → config field name
+            _key_map = {
+                "be_trigger_r":    "protection_be_trigger_r",
+                "be_buffer_pips":  "protection_be_buffer_pips",
+                "lock_trigger_r":  "protection_lock_trigger_r",
+                "lock_amount_r":   "protection_lock_amount_r",
+                "trail_trigger_r": "protection_trail_trigger_r",
+                "trail_atr_mult":  "protection_trail_atr_mult",
+            }
+            config_key = _key_map.get(key, f"protection_{key}")
             if hasattr(self._config, config_key):
                 setattr(self._config, config_key, value)
 

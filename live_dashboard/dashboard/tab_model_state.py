@@ -204,9 +204,9 @@ class ModelStateTab(QWidget):
         row += 1
 
         layout.addWidget(_make_label("Trigger:"), row, 0)
-        self._spin_ai_be_trigger = self._make_protection_spin(0.10, 100.0, 2.00, currency.sym())
+        self._spin_ai_be_trigger = self._make_protection_spin(0.1, 5.0, 1.0, "R")
         layout.addWidget(self._spin_ai_be_trigger, row, 1)
-        layout.addWidget(_make_label("profit to move SL to breakeven",
+        layout.addWidget(_make_label("R profit to move SL to breakeven",
                                      C["subtext"], font_size=11), row, 2)
         row += 1
 
@@ -223,16 +223,16 @@ class ModelStateTab(QWidget):
         row += 1
 
         layout.addWidget(_make_label("Trigger:"), row, 0)
-        self._spin_ai_lock_trigger = self._make_protection_spin(0.10, 200.0, 3.00, currency.sym())
+        self._spin_ai_lock_trigger = self._make_protection_spin(0.1, 5.0, 1.5, "R")
         layout.addWidget(self._spin_ai_lock_trigger, row, 1)
-        layout.addWidget(_make_label("profit to activate lock",
+        layout.addWidget(_make_label("R profit to activate lock",
                                      C["subtext"], font_size=11), row, 2)
         row += 1
 
         layout.addWidget(_make_label("Lock:"), row, 0)
-        self._spin_ai_lock_amount = self._make_protection_spin(0.10, 100.0, 1.50, currency.sym())
+        self._spin_ai_lock_amount = self._make_protection_spin(0.1, 3.0, 0.5, "R")
         layout.addWidget(self._spin_ai_lock_amount, row, 1)
-        layout.addWidget(_make_label("guaranteed profit locked in",
+        layout.addWidget(_make_label("R guaranteed profit locked in",
                                      C["subtext"], font_size=11), row, 2)
         row += 1
 
@@ -242,14 +242,14 @@ class ModelStateTab(QWidget):
         row += 1
 
         layout.addWidget(_make_label("Trigger:"), row, 0)
-        self._spin_ai_trail_trigger = self._make_protection_spin(0.10, 200.0, 4.00, currency.sym())
+        self._spin_ai_trail_trigger = self._make_protection_spin(0.1, 5.0, 2.0, "R")
         layout.addWidget(self._spin_ai_trail_trigger, row, 1)
-        layout.addWidget(_make_label("profit to start trailing stop",
+        layout.addWidget(_make_label("R profit to start trailing stop",
                                      C["subtext"], font_size=11), row, 2)
         row += 1
 
         layout.addWidget(_make_label("Distance:"), row, 0)
-        self._spin_ai_trail_atr = self._make_protection_spin(0.3, 3.0, 1.0, "ATR")
+        self._spin_ai_trail_atr = self._make_protection_spin(0.3, 3.0, 1.5, "ATR")
         layout.addWidget(self._spin_ai_trail_atr, row, 1)
         layout.addWidget(_make_label("ATR multiplier for trail distance",
                                      C["subtext"], font_size=11), row, 2)
@@ -358,14 +358,14 @@ class ModelStateTab(QWidget):
         )
 
     def _on_ai_reset_clicked(self) -> None:
-        """Reset AI protection spinboxes to default £ values."""
+        """Reset AI protection spinboxes to default R values."""
         defaults = {
-            "be_trigger_gbp": 2.00,
+            "be_trigger_r": 1.0,
             "be_buffer_pips": 0.5,
-            "lock_trigger_gbp": 3.00,
-            "lock_amount_gbp": 1.50,
-            "trail_trigger_gbp": 4.00,
-            "trail_atr_mult": 1.0,
+            "lock_trigger_r": 1.5,
+            "lock_amount_r": 0.5,
+            "trail_trigger_r": 2.0,
+            "trail_atr_mult": 1.5,
         }
         self.load_ai_protection_settings(defaults)
         self._lbl_ai_save_status.setText("(unsaved — defaults loaded)")
@@ -377,22 +377,22 @@ class ModelStateTab(QWidget):
     def get_ai_protection_settings(self) -> dict:
         """Return current AI protection spinbox values as a dict."""
         return {
-            "be_trigger_gbp": self._spin_ai_be_trigger.value(),
+            "be_trigger_r": self._spin_ai_be_trigger.value(),
             "be_buffer_pips": self._spin_ai_be_buffer.value(),
-            "lock_trigger_gbp": self._spin_ai_lock_trigger.value(),
-            "lock_amount_gbp": self._spin_ai_lock_amount.value(),
-            "trail_trigger_gbp": self._spin_ai_trail_trigger.value(),
+            "lock_trigger_r": self._spin_ai_lock_trigger.value(),
+            "lock_amount_r": self._spin_ai_lock_amount.value(),
+            "trail_trigger_r": self._spin_ai_trail_trigger.value(),
             "trail_atr_mult": self._spin_ai_trail_atr.value(),
         }
 
     def load_ai_protection_settings(self, settings: dict) -> None:
         """Load AI protection values into spinboxes (blocks signals)."""
         mapping = {
-            "be_trigger_gbp": self._spin_ai_be_trigger,
+            "be_trigger_r": self._spin_ai_be_trigger,
             "be_buffer_pips": self._spin_ai_be_buffer,
-            "lock_trigger_gbp": self._spin_ai_lock_trigger,
-            "lock_amount_gbp": self._spin_ai_lock_amount,
-            "trail_trigger_gbp": self._spin_ai_trail_trigger,
+            "lock_trigger_r": self._spin_ai_lock_trigger,
+            "lock_amount_r": self._spin_ai_lock_amount,
+            "trail_trigger_r": self._spin_ai_trail_trigger,
             "trail_atr_mult": self._spin_ai_trail_atr,
         }
         for key, spin in mapping.items():

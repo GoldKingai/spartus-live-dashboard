@@ -192,11 +192,10 @@ class SettingsTab(QWidget):
 
         s1_row = QHBoxLayout()
         s1_row.addWidget(self._make_label("Activate when profit reaches:"))
-        self._spin_be_trigger = self._make_spin(0.10, 100.0, 2.00, currency.sym(), spin_style, 110)
+        self._spin_be_trigger = self._make_spin(0.1, 5.0, 1.0, "R", spin_style, 110)
         s1_row.addWidget(self._spin_be_trigger)
-        _csy = currency.sym()
         s1_row.addWidget(self._make_label(
-            f"  (e.g. {_csy}2.00 = move SL to entry when up {_csy}2)", C["label"],
+            "  (1.0R = move SL to entry when up 1x your initial risk)", C["label"],
         ))
         s1_row.addStretch()
         layout.addLayout(s1_row)
@@ -217,17 +216,17 @@ class SettingsTab(QWidget):
 
         s2_row1 = QHBoxLayout()
         s2_row1.addWidget(self._make_label("Activate when profit reaches:"))
-        self._spin_lock_trigger = self._make_spin(0.10, 200.0, 3.00, currency.sym(), spin_style, 110)
+        self._spin_lock_trigger = self._make_spin(0.1, 5.0, 1.5, "R", spin_style, 110)
         s2_row1.addWidget(self._spin_lock_trigger)
         s2_row1.addStretch()
         layout.addLayout(s2_row1)
 
         s2_row2 = QHBoxLayout()
         s2_row2.addWidget(self._make_label("Guaranteed profit to lock in:"))
-        self._spin_lock_amount = self._make_spin(0.10, 100.0, 1.50, currency.sym(), spin_style, 110)
+        self._spin_lock_amount = self._make_spin(0.1, 3.0, 0.5, "R", spin_style, 110)
         s2_row2.addWidget(self._spin_lock_amount)
         s2_row2.addWidget(self._make_label(
-            f"  (e.g. {currency.sym()}1.50 = SL moved to lock {currency.sym()}1.50 profit)", C["label"],
+            "  (0.5R = lock half your initial risk as guaranteed profit)", C["label"],
         ))
         s2_row2.addStretch()
         layout.addLayout(s2_row2)
@@ -249,7 +248,7 @@ class SettingsTab(QWidget):
 
         s3_row1 = QHBoxLayout()
         s3_row1.addWidget(self._make_label("Activate when profit reaches:"))
-        self._spin_trail_trigger = self._make_spin(0.10, 200.0, 4.00, currency.sym(), spin_style, 110)
+        self._spin_trail_trigger = self._make_spin(0.1, 5.0, 2.0, "R", spin_style, 110)
         s3_row1.addWidget(self._spin_trail_trigger)
         s3_row1.addStretch()
         layout.addLayout(s3_row1)
@@ -465,13 +464,13 @@ class SettingsTab(QWidget):
         )
 
     def _on_reset_clicked(self) -> None:
-        """Reset protection settings to default £ values."""
+        """Reset protection settings to default R values."""
         defaults = {
-            "be_trigger_gbp": 2.00,
-            "lock_trigger_gbp": 3.00,
-            "lock_amount_gbp": 1.50,
-            "trail_trigger_gbp": 4.00,
-            "trail_atr_mult": 1.0,
+            "be_trigger_r": 1.0,
+            "lock_trigger_r": 1.5,
+            "lock_amount_r": 0.5,
+            "trail_trigger_r": 2.0,
+            "trail_atr_mult": 1.5,
         }
         self.load_protection_settings(defaults)
         self._lbl_save_status.setText("(unsaved — defaults loaded)")
@@ -482,10 +481,10 @@ class SettingsTab(QWidget):
     def get_protection_settings(self) -> dict:
         """Return current UI protection settings as a dict."""
         return {
-            "be_trigger_gbp": self._spin_be_trigger.value(),
-            "lock_trigger_gbp": self._spin_lock_trigger.value(),
-            "lock_amount_gbp": self._spin_lock_amount.value(),
-            "trail_trigger_gbp": self._spin_trail_trigger.value(),
+            "be_trigger_r": self._spin_be_trigger.value(),
+            "lock_trigger_r": self._spin_lock_trigger.value(),
+            "lock_amount_r": self._spin_lock_amount.value(),
+            "trail_trigger_r": self._spin_trail_trigger.value(),
             "trail_atr_mult": self._spin_trail_atr.value(),
         }
 
@@ -495,10 +494,10 @@ class SettingsTab(QWidget):
         Blocks signals to avoid triggering change events during init.
         """
         for spin, key in [
-            (self._spin_be_trigger, "be_trigger_gbp"),
-            (self._spin_lock_trigger, "lock_trigger_gbp"),
-            (self._spin_lock_amount, "lock_amount_gbp"),
-            (self._spin_trail_trigger, "trail_trigger_gbp"),
+            (self._spin_be_trigger, "be_trigger_r"),
+            (self._spin_lock_trigger, "lock_trigger_r"),
+            (self._spin_lock_amount, "lock_amount_r"),
+            (self._spin_trail_trigger, "trail_trigger_r"),
             (self._spin_trail_atr, "trail_atr_mult"),
         ]:
             spin.blockSignals(True)
