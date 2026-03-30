@@ -1758,14 +1758,18 @@ class SpartusOrchestrator:
             if not bars.empty:
                 current_price = float(bars["close"].iloc[-1])
 
-            # Compute P&L directly from executor position (position_manager
-            # is not synced after new trades -- this avoids that gap).
+            # Use MT5's own profit figure when available (sync_position stores it).
+            # This is always correct regardless of fill_price issues.
             entry = pos["entry_price"]
             lots = pos["lots"]
-            if current_price > 0 and entry > 0:
-                sym_info = self._mt5_bridge.get_symbol_info()
-                tick_value = sym_info.get("tick_value", 0.745)
-                tick_size = sym_info.get("tick_size", 0.01)
+            sym_info = self._mt5_bridge.get_symbol_info()
+            tick_value = sym_info.get("tick_value", 0.745)
+            tick_size = sym_info.get("tick_size", 0.01)
+
+            mt5_profit = pos.get("mt5_profit")
+            if mt5_profit is not None:
+                pnl = mt5_profit
+            elif current_price > 0 and entry > 0:
                 price_move = (
                     (current_price - entry) if pos["side"] == "LONG"
                     else (entry - current_price)

@@ -554,15 +554,18 @@ class LiveStatusTab(QWidget):
         def _fmt_gbp(v: float) -> str:
             return currency.fmt(v)
 
+        _GREEN = C["green"]   # All triggered stages glow green
+        _GRAY  = C["label"]   # Untriggered / inactive
+
         # Stage 1: Breakeven
         if stage >= 1:
             self._dot_be.setText("●")
             self._dot_be.setStyleSheet(
-                f"color: {C['yellow']}; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_be_name.setText("Breakeven")
             self._lbl_be_name.setStyleSheet(
-                f"color: {C['yellow']}; font-size: 12px; font-weight: bold; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 12px; font-weight: bold; background: transparent; border: none;"
             )
             self._lbl_be_thresh.setText(f"at +{_fmt_gbp(be_gbp)}")
             self._lbl_be_thresh.setStyleSheet(
@@ -570,16 +573,16 @@ class LiveStatusTab(QWidget):
             )
             self._lbl_be_stat.setText("✓ SL at entry")
             self._lbl_be_stat.setStyleSheet(
-                f"color: {C['yellow']}; font-size: 11px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 11px; background: transparent; border: none;"
             )
         else:
             self._dot_be.setText("○")
             self._dot_be.setStyleSheet(
-                f"color: {C['label']}; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_be_name.setText("Breakeven")
             self._lbl_be_name.setStyleSheet(
-                f"color: {C['label']}; font-size: 12px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 12px; background: transparent; border: none;"
             )
             self._lbl_be_thresh.setText(f"at +{_fmt_gbp(be_gbp)}")
             self._lbl_be_thresh.setStyleSheet(
@@ -598,11 +601,11 @@ class LiveStatusTab(QWidget):
         if stage >= 2:
             self._dot_lock.setText("●")
             self._dot_lock.setStyleSheet(
-                f"color: {C['peach']}; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_lock_name.setText("Profit Lock")
             self._lbl_lock_name.setStyleSheet(
-                f"color: {C['peach']}; font-size: 12px; font-weight: bold; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 12px; font-weight: bold; background: transparent; border: none;"
             )
             self._lbl_lock_thresh.setText(f"at +{_fmt_gbp(lock_gbp)}")
             self._lbl_lock_thresh.setStyleSheet(
@@ -611,16 +614,16 @@ class LiveStatusTab(QWidget):
             locked_display = currency.fmt(locked_pnl) if locked_pnl > 0 else _fmt_gbp(lock_amount_gbp)
             self._lbl_lock_stat.setText(f"✓ locked {locked_display}")
             self._lbl_lock_stat.setStyleSheet(
-                f"color: {C['peach']}; font-size: 11px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 11px; background: transparent; border: none;"
             )
         else:
             self._dot_lock.setText("○")
             self._dot_lock.setStyleSheet(
-                f"color: {C['label']}; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_lock_name.setText("Profit Lock")
             self._lbl_lock_name.setStyleSheet(
-                f"color: {C['label']}; font-size: 12px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 12px; background: transparent; border: none;"
             )
             self._lbl_lock_thresh.setText(f"at +{_fmt_gbp(lock_gbp)}  (locks {_fmt_gbp(lock_amount_gbp)})")
             self._lbl_lock_thresh.setStyleSheet(
@@ -640,11 +643,11 @@ class LiveStatusTab(QWidget):
         if stage >= 3:
             self._dot_trail.setText("●")
             self._dot_trail.setStyleSheet(
-                f"color: #00BFFF; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_trail_name.setText("Trailing Stop")
             self._lbl_trail_name.setStyleSheet(
-                f"color: #00BFFF; font-size: 12px; font-weight: bold; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 12px; font-weight: bold; background: transparent; border: none;"
             )
             self._lbl_trail_thresh.setText(f"at +{_fmt_gbp(trail_gbp)}")
             self._lbl_trail_thresh.setStyleSheet(
@@ -652,16 +655,16 @@ class LiveStatusTab(QWidget):
             )
             self._lbl_trail_stat.setText(f"✓ Active  ({trail_atr:.1f}× ATR)")
             self._lbl_trail_stat.setStyleSheet(
-                f"color: #00BFFF; font-size: 11px; background: transparent; border: none;"
+                f"color: {_GREEN}; font-size: 11px; background: transparent; border: none;"
             )
         else:
             self._dot_trail.setText("○")
             self._dot_trail.setStyleSheet(
-                f"color: {C['label']}; font-size: 14px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 14px; background: transparent; border: none;"
             )
             self._lbl_trail_name.setText("Trailing Stop")
             self._lbl_trail_name.setStyleSheet(
-                f"color: {C['label']}; font-size: 12px; background: transparent; border: none;"
+                f"color: {_GRAY}; font-size: 12px; background: transparent; border: none;"
             )
             self._lbl_trail_thresh.setText(f"at +{_fmt_gbp(trail_gbp)}  ({trail_atr:.1f}× ATR)")
             self._lbl_trail_thresh.setStyleSheet(
@@ -680,15 +683,15 @@ class LiveStatusTab(QWidget):
         # --- Summary line ---
         if stage >= 3:
             summary_txt = f"Trailing active  |  Min guaranteed: {currency.fmt(locked_pnl) if locked_pnl > 0 else '?'}"
-            summary_color = "#00BFFF"
+            summary_color = _GREEN
         elif stage == 2:
             dist_to_t = trail_gbp - pnl
             summary_txt = f"Profit locked: {currency.fmt(locked_pnl) if locked_pnl > 0 else _fmt_gbp(lock_amount_gbp)}  |  Trail in {_fmt_gbp(max(dist_to_t, 0))}"
-            summary_color = C["peach"]
+            summary_color = _GREEN
         elif stage == 1:
             dist_to_l = lock_gbp - pnl
             summary_txt = f"BE active  |  Lock profit in {_fmt_gbp(max(dist_to_l, 0))}"
-            summary_color = C["yellow"]
+            summary_color = _GREEN
         elif pnl >= 0:
             dist_to_b = be_gbp - pnl
             summary_txt = f"Next: Breakeven in {_fmt_gbp(max(dist_to_b, 0))}"

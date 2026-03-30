@@ -2043,11 +2043,28 @@ class TradeExecutor:
         position_exists = any(p["ticket"] == ticket for p in open_positions)
 
         if position_exists:
-            # Update SL/TP from MT5 (in case of manual modification)
+            # Update SL/TP/entry_price/profit from MT5
             for p in open_positions:
                 if p["ticket"] == ticket:
                     self._position["sl"] = p.get("sl", self._position["sl"])
                     self._position["tp"] = p.get("tp", self._position["tp"])
+                    self._position["mt5_profit"] = p.get("profit", None)
+                    # Self-heal entry_price if it was stored as 0 (fill_price=0 bug)
+                    if self._position.get("entry_price", 0.0) == 0.0:
+                        real_entry = p.get("price_open", 0.0)
+                        if real_entry > 0:
+                            self._position["entry_price"] = real_entry
+                            # Recompute r_value_gbp now that entry is known
+                            _sym = self._bridge.get_symbol_info(self._config.mt5_symbol) or {}
+                            _tick_sz = _sym.get("tick_size", 0.01) or 0.01
+                            _tick_val = _sym.get("tick_value", 0.745)
+                            _r_dist = abs(real_entry - self._initial_sl)
+                            if _r_dist > 0:
+                                self._r_value_gbp = (_r_dist / _tick_sz) * _tick_val * self._position.get("lots", 0.01)
+                            log.info(
+                                "Self-healed entry_price=0 -> %.2f for ticket=%d  r_value_gbp=%.4f",
+                                real_entry, ticket, self._r_value_gbp,
+                            )
                     break
             return "IN_SYNC"
 
