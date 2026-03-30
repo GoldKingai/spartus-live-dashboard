@@ -505,31 +505,58 @@ class LiveRiskManager:
             return current_sl, new_stage
 
         # Calculate the most protective floor across ALL active stages up to
-        # new_stage.  Without this, if all thresholds fire at once (common with
-        # GBP thresholds on small-lot trades), only the stage-3 ATR trail floor
-        # is computed.  The trail can be looser than the stage-1/2 floors when
-        # ATR is large relative to MFE, which leaves the SL unmoved even though
-        # stages 1 and 2 would have tightened it.
+        # new_stage.  Accumulate the best (tightest) floor from each stage.
+        #
+        # CRITICAL: each computed floor must be a valid MT5 SL value:
+        #   LONG  — SL must be BELOW current price (BID - spread):
+        #           floor is only applied if floor < current_price - spread
+        #   SHORT — SL must be ABOVE current price (ASK + spread):
+        #           floor is only applied if floor > current_price + spread
+        #
+        # This matters for GBP thresholds that fire at low R values: e.g.
+        # the stage-2 lock SL (entry - 0.5R) can be BELOW the current price
+        # for a SHORT if the trade hasn't moved far enough yet.  Sending an
+        # invalid SL causes MT5 retcode=10016.  We fall back to the
+        # best valid floor from earlier stages rather than skip SL movement.
         lock_dist = lock_amount * r_distance
         min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
 
         if side == "LONG":
-            # LONG: higher SL = tighter.  Accumulate from stage 1 upward.
-            floor_sl = entry + be_buffer
+            # LONG: higher SL = tighter.
+            # Stage 1 — BE: entry + buffer (valid when price > entry + buffer)
+            be_floor = entry + be_buffer
+            floor_sl = be_floor if be_floor < current_price - spread_points else current_sl
+
+            # Stage 2 — Lock: entry + lock_dist (valid when price > entry + lock_dist)
             if new_stage >= 2:
-                floor_sl = max(floor_sl, entry + lock_dist)
+                lock_floor = entry + lock_dist
+                if lock_floor < current_price - spread_points:
+                    floor_sl = max(floor_sl, lock_floor)
+
+            # Stage 3 — Trail: current_price - trail (always below market, always valid)
             if new_stage >= 3:
                 trail = max(trail_atr * atr, min_trail_atr * atr)
                 floor_sl = max(floor_sl, current_price - trail)
+
             new_sl = max(floor_sl, current_sl)
+
         else:
-            # SHORT: lower SL = tighter.  Accumulate from stage 1 upward.
-            floor_sl = entry - be_buffer
+            # SHORT: lower SL = tighter.
+            # Stage 1 — BE: entry - buffer (valid when price < entry - buffer)
+            be_floor = entry - be_buffer
+            floor_sl = be_floor if be_floor > current_price + spread_points else current_sl
+
+            # Stage 2 — Lock: entry - lock_dist (valid when price < entry - lock_dist)
             if new_stage >= 2:
-                floor_sl = min(floor_sl, entry - lock_dist)
+                lock_floor = entry - lock_dist
+                if lock_floor > current_price + spread_points:
+                    floor_sl = min(floor_sl, lock_floor)
+
+            # Stage 3 — Trail: current_price + trail (always above market, always valid)
             if new_stage >= 3:
                 trail = max(trail_atr * atr, min_trail_atr * atr)
                 floor_sl = min(floor_sl, current_price + trail)
+
             new_sl = min(floor_sl, current_sl)
 
         return new_sl, new_stage
@@ -637,23 +664,30 @@ class LiveRiskManager:
         if new_stage == 0:
             return current_sl, new_stage
 
-        # Same cumulative-best-floor logic as apply_profit_protection.
-        # See that method's comment for the full explanation.
+        # Same validated-cumulative-floor logic as apply_profit_protection.
+        # Each floor is only applied if it's a valid MT5 SL (above ask for
+        # SHORT, below bid for LONG).  See that method for full explanation.
         lock_dist = lock_amount * r_distance
         min_trail_atr = getattr(self.cfg, "min_sl_trail_atr", 0.5)
 
         if side == "LONG":
-            floor_sl = entry + be_buffer
+            be_floor = entry + be_buffer
+            floor_sl = be_floor if be_floor < current_price - spread_points else current_sl
             if new_stage >= 2:
-                floor_sl = max(floor_sl, entry + lock_dist)
+                lock_floor = entry + lock_dist
+                if lock_floor < current_price - spread_points:
+                    floor_sl = max(floor_sl, lock_floor)
             if new_stage >= 3:
                 trail = max(trail_atr * atr, min_trail_atr * atr)
                 floor_sl = max(floor_sl, current_price - trail)
             new_sl = max(floor_sl, current_sl)
         else:
-            floor_sl = entry - be_buffer
+            be_floor = entry - be_buffer
+            floor_sl = be_floor if be_floor > current_price + spread_points else current_sl
             if new_stage >= 2:
-                floor_sl = min(floor_sl, entry - lock_dist)
+                lock_floor = entry - lock_dist
+                if lock_floor > current_price + spread_points:
+                    floor_sl = min(floor_sl, lock_floor)
             if new_stage >= 3:
                 trail = max(trail_atr * atr, min_trail_atr * atr)
                 floor_sl = min(floor_sl, current_price + trail)
