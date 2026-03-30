@@ -278,7 +278,7 @@ class AlertsTab(QWidget):
 
         self._alert_log = QTextEdit()
         self._alert_log.setReadOnly(True)
-        self._alert_log.setFont(QFont("Cascadia Code", 11))
+        self._alert_log.setFont(QFont("Cascadia Code", 14))
         self._alert_log.setStyleSheet(
             f"background-color: {C['surface']}; "
             f"color: {C['text']}; "
@@ -393,11 +393,11 @@ class AlertsTab(QWidget):
         cb_color = C["green"] if cb_is_off else C["peach"]
         self._lbl_circuit_breaker.setText(str(cb))
         self._lbl_circuit_breaker.setStyleSheet(
-            f"color: {cb_color}; font-size: 13px; "
+            f"color: {cb_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
         self._lbl_circuit_breaker_dot.setStyleSheet(
-            f"color: {cb_color}; font-size: 12px; "
+            f"color: {cb_color}; font-size: 14px; "
             f"background: transparent; border: none;"
         )
 
@@ -405,11 +405,11 @@ class AlertsTab(QWidget):
         weekend = status.get("weekend_close", "--")
         self._lbl_weekend.setText(str(weekend))
         self._lbl_weekend.setStyleSheet(
-            f"color: {C['text']}; font-size: 13px; "
+            f"color: {C['text']}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
         self._lbl_weekend_dot.setStyleSheet(
-            f"color: {C['text']}; font-size: 12px; "
+            f"color: {C['text']}; font-size: 14px; "
             f"background: transparent; border: none;"
         )
 
@@ -420,11 +420,11 @@ class AlertsTab(QWidget):
         dd_color = C["red"] if dd_pct > 80 else C["yellow"] if dd_pct > 50 else C["green"]
         self._lbl_daily_dd.setText(f"{dd_current:.1f}% / {dd_limit:.1f}%")
         self._lbl_daily_dd.setStyleSheet(
-            f"color: {dd_color}; font-size: 13px; "
+            f"color: {dd_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
         self._lbl_daily_dd_dot.setStyleSheet(
-            f"color: {dd_color}; font-size: 12px; "
+            f"color: {dd_color}; font-size: 14px; "
             f"background: transparent; border: none;"
         )
 
@@ -433,11 +433,11 @@ class AlertsTab(QWidget):
         consec_color = C["red"] if consec >= 3 else C["yellow"] if consec >= 2 else C["green"]
         self._lbl_consec_losses.setText(str(consec))
         self._lbl_consec_losses.setStyleSheet(
-            f"color: {consec_color}; font-size: 13px; "
+            f"color: {consec_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
         self._lbl_consec_losses_dot.setStyleSheet(
-            f"color: {consec_color}; font-size: 12px; "
+            f"color: {consec_color}; font-size: 14px; "
             f"background: transparent; border: none;"
         )
 
@@ -452,11 +452,11 @@ class AlertsTab(QWidget):
             conn_color = C["red"]
         self._lbl_connection.setText(str(conn))
         self._lbl_connection.setStyleSheet(
-            f"color: {conn_color}; font-size: 13px; "
+            f"color: {conn_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
         self._lbl_connection_dot.setStyleSheet(
-            f"color: {conn_color}; font-size: 12px; "
+            f"color: {conn_color}; font-size: 14px; "
             f"background: transparent; border: none;"
         )
 
@@ -513,7 +513,7 @@ class AlertsTab(QWidget):
             f"{trades_cur} / {trades_soft} soft / {trades_hard} hard"
         )
         self._lbl_risk_trades.setStyleSheet(
-            f"color: {trades_color}; font-size: 13px; "
+            f"color: {trades_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
 
@@ -524,7 +524,7 @@ class AlertsTab(QWidget):
         dd_color = C["red"] if dd_pct > 80 else C["yellow"] if dd_pct > 50 else C["text"]
         self._lbl_risk_daily_dd.setText(f"{dd_cur:.1f}% / {dd_halt:.1f}% daily halt")
         self._lbl_risk_daily_dd.setStyleSheet(
-            f"color: {dd_color}; font-size: 13px; "
+            f"color: {dd_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
 
@@ -541,7 +541,7 @@ class AlertsTab(QWidget):
             f"{total_dd_cur:.1f}% / {total_dd_limit:.1f}% total limit"
         )
         self._lbl_risk_total_dd.setStyleSheet(
-            f"color: {total_color}; font-size: 13px; "
+            f"color: {total_color}; font-size: 15px; "
             f"background: transparent; border: none;"
         )
 
@@ -550,7 +550,7 @@ class AlertsTab(QWidget):
         if equity is not None:
             self._lbl_risk_equity.setText(currency.fmt(equity))
             self._lbl_risk_equity.setStyleSheet(
-                f"color: {C['text']}; font-size: 13px; font-weight: bold; "
+                f"color: {C['text']}; font-size: 15px; font-weight: bold; "
                 f"background: transparent; border: none;"
             )
 

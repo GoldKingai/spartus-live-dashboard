@@ -26,9 +26,12 @@ All text follows dark-theme rules: bright white (#e6edf3) values,
 light gray (#b1bac4) labels -- NEVER dark gray on dark backgrounds.
 """
 
+import json
+import pathlib
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QGroupBox, QLabel, QDoubleSpinBox, QPushButton,
+    QGroupBox, QLabel, QDoubleSpinBox, QPushButton, QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -252,7 +255,7 @@ class ModelStateTab(QWidget):
                                      C["subtext"], font_size=11), row, 2)
         row += 1
 
-        # Button row: Save + Reset
+        # Button row: Save + Reset + Export + Import
         btn_row = QHBoxLayout()
 
         self._btn_ai_save = QPushButton("Save AI Protection")
@@ -276,6 +279,25 @@ class ModelStateTab(QWidget):
         )
         self._btn_ai_reset.clicked.connect(self._on_ai_reset_clicked)
         btn_row.addWidget(self._btn_ai_reset)
+
+        _small_btn_style = (
+            f"QPushButton {{ background: {C['bg']}; color: {C['label']}; "
+            f"border: 1px solid {C['border']}; border-radius: 4px; "
+            f"font-size: 11px; padding: 4px 10px; }}"
+            f"QPushButton:hover {{ background: {C['surface2']}; color: {C['text']}; }}"
+        )
+
+        self._btn_ai_export = QPushButton("Export JSON")
+        self._btn_ai_export.setFixedHeight(30)
+        self._btn_ai_export.setStyleSheet(_small_btn_style)
+        self._btn_ai_export.clicked.connect(self._on_ai_export_clicked)
+        btn_row.addWidget(self._btn_ai_export)
+
+        self._btn_ai_import = QPushButton("Import JSON")
+        self._btn_ai_import.setFixedHeight(30)
+        self._btn_ai_import.setStyleSheet(_small_btn_style)
+        self._btn_ai_import.clicked.connect(self._on_ai_import_clicked)
+        btn_row.addWidget(self._btn_ai_import)
 
         self._lbl_ai_save_status = _make_label("", C["subtext"], font_size=11)
         btn_row.addWidget(self._lbl_ai_save_status)
@@ -378,6 +400,57 @@ class ModelStateTab(QWidget):
                 spin.blockSignals(True)
                 spin.setValue(float(settings[key]))
                 spin.blockSignals(False)
+
+    def _on_ai_export_clicked(self) -> None:
+        """Export AI protection settings to a JSON file chosen by the user."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export AI Protection Settings",
+            str(pathlib.Path.home() / "ai_protection_settings.json"),
+            "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            settings = self.get_ai_protection_settings()
+            settings["_source"] = "spartus_ai_protection"
+            pathlib.Path(path).write_text(
+                json.dumps(settings, indent=2), encoding="utf-8"
+            )
+            self._lbl_ai_save_status.setText(f"Exported → {pathlib.Path(path).name}")
+            self._lbl_ai_save_status.setStyleSheet(
+                f"color: {C['green']}; font-size: 11px; "
+                f"background: transparent; border: none;"
+            )
+        except Exception as exc:
+            self._lbl_ai_save_status.setText(f"Export failed: {exc}")
+            self._lbl_ai_save_status.setStyleSheet(
+                f"color: {C['red']}; font-size: 11px; "
+                f"background: transparent; border: none;"
+            )
+
+    def _on_ai_import_clicked(self) -> None:
+        """Import AI protection settings from a JSON file chosen by the user."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import AI Protection Settings",
+            str(pathlib.Path.home()),
+            "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            self.load_ai_protection_settings(data)
+            self._lbl_ai_save_status.setText("Imported (unsaved)")
+            self._lbl_ai_save_status.setStyleSheet(
+                f"color: {C['yellow']}; font-size: 11px; "
+                f"background: transparent; border: none;"
+            )
+        except Exception as exc:
+            self._lbl_ai_save_status.setText(f"Import failed: {exc}")
+            self._lbl_ai_save_status.setStyleSheet(
+                f"color: {C['red']}; font-size: 11px; "
+                f"background: transparent; border: none;"
+            )
 
     # ------------------------------------------------------------------
     # 3. FEATURE HEALTH

@@ -7,13 +7,16 @@ Protection settings are INDEPENDENT from AI trade protection.
 
 from __future__ import annotations
 
+import json
 import logging
+import pathlib
 from typing import Any, Dict
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -319,6 +322,27 @@ class SettingsTab(QWidget):
         self._btn_reset.clicked.connect(self._on_reset_clicked)
         save_row.addWidget(self._btn_reset)
 
+        _export_import_style = (
+            f"QPushButton {{ background-color: {C['surface2']}; "
+            f"color: {C['label']}; font-size: 13px; "
+            f"border: 1px solid {C['border']}; border-radius: 6px; }}"
+            f"QPushButton:hover {{ background-color: {C['border']}; color: {C['text']}; }}"
+        )
+
+        self._btn_export = QPushButton("Export JSON")
+        self._btn_export.setFixedHeight(40)
+        self._btn_export.setFixedWidth(130)
+        self._btn_export.setStyleSheet(_export_import_style)
+        self._btn_export.clicked.connect(self._on_export_clicked)
+        save_row.addWidget(self._btn_export)
+
+        self._btn_import = QPushButton("Import JSON")
+        self._btn_import.setFixedHeight(40)
+        self._btn_import.setFixedWidth(130)
+        self._btn_import.setStyleSheet(_export_import_style)
+        self._btn_import.clicked.connect(self._on_import_clicked)
+        save_row.addWidget(self._btn_import)
+
         self._lbl_save_status = QLabel("")
         self._lbl_save_status.setStyleSheet(
             f"color: {C['green']}; font-size: {_FS_NOTE}px; margin-left: 10px;"
@@ -480,6 +504,54 @@ class SettingsTab(QWidget):
             spin.blockSignals(True)
             spin.setValue(settings.get(key, spin.value()))
             spin.blockSignals(False)
+
+    def _on_export_clicked(self) -> None:
+        """Export manual trade management settings to a JSON file."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Manual Trade Settings",
+            str(pathlib.Path.home() / "manual_trade_settings.json"),
+            "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            settings = self.get_protection_settings()
+            settings["manage_manual_trades"] = self._manual_trade_enabled
+            settings["_source"] = "spartus_manual_trade_management"
+            pathlib.Path(path).write_text(
+                json.dumps(settings, indent=2), encoding="utf-8"
+            )
+            self._lbl_save_status.setText(f"Exported → {pathlib.Path(path).name}")
+            self._lbl_save_status.setStyleSheet(
+                f"color: {C['green']}; font-size: {_FS_NOTE}px; margin-left: 10px;"
+            )
+        except Exception as exc:
+            self._lbl_save_status.setText(f"Export failed: {exc}")
+            self._lbl_save_status.setStyleSheet(
+                f"color: {C['red']}; font-size: {_FS_NOTE}px; margin-left: 10px;"
+            )
+
+    def _on_import_clicked(self) -> None:
+        """Import manual trade management settings from a JSON file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Manual Trade Settings",
+            str(pathlib.Path.home()),
+            "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            self.load_protection_settings(data)
+            self._lbl_save_status.setText("Imported (unsaved)")
+            self._lbl_save_status.setStyleSheet(
+                f"color: {C['yellow']}; font-size: {_FS_NOTE}px; margin-left: 10px;"
+            )
+        except Exception as exc:
+            self._lbl_save_status.setText(f"Import failed: {exc}")
+            self._lbl_save_status.setStyleSheet(
+                f"color: {C['red']}; font-size: {_FS_NOTE}px; margin-left: 10px;"
+            )
 
     # ------------------------------------------------------------------
     # Toggle handler
