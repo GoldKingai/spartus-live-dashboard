@@ -7,7 +7,7 @@ containing:
     config.json              TrainingConfig snapshot
     metadata.json            Training week, val_sharpe, balance, obs_dim, etc.
     reward_state.json        RewardNormalizer + DiffSharpe EMA state
-    feature_baseline.json    54-feature mean/std for drift detection  (optional)
+    feature_baseline.json    55-feature mean/std for drift detection  (optional)
     correlation_baseline.json  20x20 corr matrix for regime detection (optional)
     stress_results.json      Stress matrix results for live comparison (optional)
     README.txt               Human-readable summary

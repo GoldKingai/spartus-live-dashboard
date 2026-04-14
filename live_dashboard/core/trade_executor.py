@@ -1862,14 +1862,14 @@ class TradeExecutor:
             "sl_modification_count": len(self._sl_modifications),
         }
 
-        # Named entry features (decode 670-dim obs into readable dict)
+        # Named entry features (decode obs into readable dict using model's n_features)
         if self._entry_observation is not None:
             try:
                 obs = self._entry_observation
                 if hasattr(obs, "flatten"):
                     obs = obs.flatten()
-                # Extract most recent frame (last 67 values from 670-dim stack)
-                n_features = 67
+                # Extract most recent frame (last n_features values from stacked obs)
+                n_features = self._config.n_features
                 if len(obs) >= n_features:
                     latest_frame = obs[-n_features:]
                     from src.config import TrainingConfig
@@ -1901,13 +1901,13 @@ class TradeExecutor:
         except Exception:
             pass
 
-        # Entry observation (670-dim) -- convert numpy to list for JSON
+        # Entry observation -- convert numpy to list for JSON
         if self._entry_observation is not None:
             try:
                 obs = self._entry_observation
                 if hasattr(obs, "tolist"):
                     obs = obs.tolist()
-                record["entry_observation_670"] = obs
+                record[f"entry_observation_{self._config.obs_dim}"] = obs
             except Exception:
                 pass  # Don't fail trade logging over observation snapshot
 

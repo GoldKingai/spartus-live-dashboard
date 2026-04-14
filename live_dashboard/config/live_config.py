@@ -1,7 +1,7 @@
 """LiveConfig dataclass for the Spartus Live Dashboard.
 
 Centralises every runtime parameter. Fields carry sensible defaults
-that match the training spec (v3.3.2, 67 features / 670 obs_dim).
+that match the training spec (v3.4, 68 features / 680 obs_dim, Tier 1 upgrade).
 
 Load user overrides from YAML via:
     cfg = LiveConfig.from_yaml("config/default_config.yaml")
@@ -284,7 +284,7 @@ class LiveConfig:
     n_exempt_features: int = 29
     n_precomputed: int = 54
     n_live: int = 13
-    obs_dim: int = 670
+    obs_dim: int = 670             # 67 features × 10 frame stack
 
     # ---- Feature name lists ----------------------------------------------
     market_feature_names: List[str] = field(
@@ -318,8 +318,8 @@ class LiveConfig:
             issues.append(f"min_hold_bars={self.min_hold_bars} should be >= 0")
         if self.daily_trade_hard_cap < 1:
             issues.append(f"daily_trade_hard_cap={self.daily_trade_hard_cap} should be >= 1")
-        if self.n_features != 67:
-            issues.append(f"n_features={self.n_features} should be 67")
+        if self.n_features < 60:
+            issues.append(f"n_features={self.n_features} is unexpectedly low (< 60)")
         if self.obs_dim != self.n_features * self.frame_stack:
             issues.append(
                 f"obs_dim={self.obs_dim} should be n_features*frame_stack="

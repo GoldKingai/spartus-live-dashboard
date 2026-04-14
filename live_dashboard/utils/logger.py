@@ -64,11 +64,11 @@ class LiveLogger:
         if self._bar_count % every_n_bars == 0:
             obs_data['timestamp'] = datetime.now(timezone.utc).isoformat()
             obs_data['bar_idx'] = self._bar_count
-            # Convert numpy arrays to lists for JSON
-            if 'observation_670' in obs_data:
-                import numpy as np
-                if isinstance(obs_data['observation_670'], np.ndarray):
-                    obs_data['observation_670'] = obs_data['observation_670'].tolist()
+            # Convert numpy arrays to lists for JSON (key may vary by model obs_dim)
+            import numpy as np
+            for key in list(obs_data.keys()):
+                if key.startswith('observation_') and isinstance(obs_data[key], np.ndarray):
+                    obs_data[key] = obs_data[key].tolist()
             self._append_jsonl('observations.jsonl', obs_data)
 
     def log_feature_stats(self, stats_data: dict):

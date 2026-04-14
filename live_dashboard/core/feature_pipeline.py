@@ -1,9 +1,10 @@
-"""LiveFeaturePipeline -- Compute all 67 features in real-time from MT5 data.
+"""LiveFeaturePipeline -- Compute all 68 features in real-time from MT5 data.
 
+Tier 1 upgrade: +1 regime_label (Upgrade 6) → 68 features / 680 obs_dim.
 Maintains rolling buffers for M5, H1, H4, D1 bars and correlated instruments.
-Produces identical 670-dim observations as training.
+Produces identical 680-dim observations as training.
 
-Feature ordering MUST match training exactly (67 features):
+Feature ordering MUST match training exactly (68 features):
     1-7:   Group A  (close_frac_diff, returns_1bar, returns_5bar, returns_20bar,
                       bar_range, close_position, body_ratio)
     8-11:  Group B  (atr_14_norm, atr_ratio, bb_width, bb_position)
@@ -24,11 +25,12 @@ Feature ordering MUST match training exactly (67 features):
     49-50: Upgrade 4 (corr_gold_usd_100, corr_gold_spx_100)
     51-54: Upgrade 5 (asian_range_norm, asian_range_position,
                        session_momentum, london_ny_overlap)
-    55-62: Group G   account features (8)
-    63-67: Group H   memory features (5)
+    55:    Upgrade 6 (regime_label — ADX>25=+1, ATR_ratio>1.2=-1, else 0)
+    56-63: Group G   account features (8)
+    64-68: Group H   memory features (5)
 
 MARKET features to z-score: Groups A-E (25) + Upgrade 1 (11) + Upgrade 4 (2) = 38.
-EXEMPT features (pass-through): Group F (4) + G-H (13) + Upgrades 2 (6), 3 (2), 5 (4) = 29.
+EXEMPT features (pass-through): Group F (4) + G-H (13) + Upgrades 2 (6), 3 (2), 5 (4) + Upgrade 6 (1) = 30.
 
 Usage:
     from config.live_config import LiveConfig
@@ -116,6 +118,8 @@ _PRECOMPUTED_FEATURE_ORDER: List[str] = [
     # Upgrade 5: Session Microstructure (4)
     "asian_range_norm", "asian_range_position",
     "session_momentum", "london_ny_overlap",
+    # Upgrade 6: Regime Label (1) — ADX>25=trending(+1), ATR_ratio>1.2=volatile(-1), else 0
+    "regime_label",
 ]
 
 # Account features (Group G, 8 features) -- order matches training
@@ -130,16 +134,16 @@ _MEMORY_FEATURE_ORDER: List[str] = [
     "trend_prediction_accuracy", "tp_hit_rate", "avg_sl_trail_profit",
 ]
 
-# Full 67-feature order
+# Full 68-feature order (Tier 1: +1 regime_label)
 _FULL_FEATURE_ORDER: List[str] = (
     _PRECOMPUTED_FEATURE_ORDER + _ACCOUNT_FEATURE_ORDER + _MEMORY_FEATURE_ORDER
 )
 
-assert len(_PRECOMPUTED_FEATURE_ORDER) == 54, (
-    f"Expected 54 precomputed features, got {len(_PRECOMPUTED_FEATURE_ORDER)}"
+assert len(_PRECOMPUTED_FEATURE_ORDER) == 55, (
+    f"Expected 55 precomputed features, got {len(_PRECOMPUTED_FEATURE_ORDER)}"
 )
-assert len(_FULL_FEATURE_ORDER) == 67, (
-    f"Expected 67 total features, got {len(_FULL_FEATURE_ORDER)}"
+assert len(_FULL_FEATURE_ORDER) == 68, (
+    f"Expected 68 total features, got {len(_FULL_FEATURE_ORDER)}"
 )
 
 # Correlated instruments -- canonical names
@@ -449,7 +453,7 @@ class LiveFeaturePipeline:
             )
             mem_arr = np.full(5, 0.5, dtype=np.float32)
 
-        # ---- Build 67-dim frame ----
+        # ---- Build frame (n_features dim, matches loaded model) ----
         frame = self._build_frame(normed_features, account_arr, mem_arr)
 
         # ---- Feature health check ----
@@ -463,7 +467,7 @@ class LiveFeaturePipeline:
         # ---- Update ATR cache ----
         self._latest_atr = get_atr_14(self._m5)
 
-        # ---- Return 670-dim stacked observation ----
+        # ---- Return stacked observation (obs_dim = n_features × frame_stack) ----
         return self._get_stacked_observation()
 
     # ------------------------------------------------------------------
@@ -565,7 +569,18 @@ class LiveFeaturePipeline:
         )
         features.update(session_feats)
 
-        # Validate we have all 54 features
+        # Upgrade 6: Regime Label (1 feature) — matches training feature_builder.py
+        # ADX>25 = trending (+1), ATR_ratio>1.2 = volatile (-1), else ranging (0)
+        adx = features.get("adx_14", 0.0)
+        atr_ratio = features.get("atr_ratio", 1.0)
+        if adx > 0.25:
+            features["regime_label"] = 1.0
+        elif atr_ratio > 1.2:
+            features["regime_label"] = -1.0
+        else:
+            features["regime_label"] = 0.0
+
+        # Validate we have all 55 precomputed features
         missing = [f for f in _PRECOMPUTED_FEATURE_ORDER if f not in features]
         if missing:
             log.warning(
@@ -588,10 +603,14 @@ class LiveFeaturePipeline:
         account_features: np.ndarray,
         memory_features: np.ndarray,
     ) -> np.ndarray:
-        """Build a 67-dim frame from feature components.
+        """Build a frame from feature components, sized to match the loaded model.
+
+        Supports both 67-feature models (pre-Tier-1, no regime_label) and
+        68-feature models (Tier 1+, includes regime_label).
 
         Assembles features in the exact training order:
-        54 precomputed (normalised) + 8 account + 5 memory = 67.
+        - 67-feature model: 54 precomputed + 8 account + 5 memory = 67
+        - 68-feature model: 55 precomputed + 8 account + 5 memory = 68
 
         Args:
             precomputed: Dict of normalised precomputed features.
@@ -599,15 +618,19 @@ class LiveFeaturePipeline:
             memory_features: 5-element array (Group H).
 
         Returns:
-            67-dim numpy array.
+            n_features-dim numpy array.
         """
-        # Precomputed features in canonical order
+        n_features = self._config.n_features  # 67 for pre-Tier-1, 68 for Tier-1+
+        n_precomp = n_features - 13  # subtract 8 account + 5 memory
+
+        # Precomputed features in canonical order, trimmed to match model
+        precomp_order = _PRECOMPUTED_FEATURE_ORDER[:n_precomp]
         precomp_arr = np.array(
-            [precomputed.get(name, 0.0) for name in _PRECOMPUTED_FEATURE_ORDER],
+            [precomputed.get(name, 0.0) for name in precomp_order],
             dtype=np.float32,
         )
 
-        # Concatenate: 54 + 8 + 5 = 67
+        # Concatenate: n_precomp + 8 + 5 = n_features
         frame = np.concatenate([precomp_arr, account_features, memory_features])
 
         # Sanitise NaN/Inf
@@ -616,20 +639,20 @@ class LiveFeaturePipeline:
         if nan_mask.any() or inf_mask.any():
             frame = np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
 
-        assert frame.shape == (67,), f"Frame shape {frame.shape} != (67,)"
+        assert frame.shape == (n_features,), f"Frame shape {frame.shape} != ({n_features},)"
         return frame
 
     def _get_stacked_observation(self) -> np.ndarray:
-        """Flatten the frame buffer to a 670-dim observation vector.
+        """Flatten the frame buffer to an obs_dim observation vector.
 
         If the frame buffer has fewer than ``frame_stack`` (10) frames,
         pads with zero frames at the front (oldest positions).
 
         Returns:
-            670-dim numpy array (10 stacked 67-dim frames).
+            obs_dim numpy array (frame_stack stacked n_features-dim frames).
         """
         n_frames = self._config.frame_stack  # 10
-        n_features = self._config.n_features  # 67
+        n_features = self._config.n_features  # 68
 
         frames = list(self._frame_buffer)
 

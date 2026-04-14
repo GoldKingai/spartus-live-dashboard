@@ -32,6 +32,8 @@ storage/reports/weekly/*
 !storage/reports/weekly/.gitkeep
 storage/models/*.zip
 storage/models/*.meta.json
+storage/live_state.json
+storage/feature_index.json
 
 # --- Deployed model binaries (large, not version-controlled) ---
 model/*.zip

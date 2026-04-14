@@ -122,7 +122,7 @@ else
     VERIFY_OK=0
 fi
 
-for pkg in PyQt6 stable_baselines3 numpy pandas ta yaml; do
+for pkg in PyQt6 stable_baselines3 numpy pandas ta yaml fastapi uvicorn; do
     if $PYTHON -c "import $pkg" 2>/dev/null; then
         echo "       [OK] $pkg"
     else

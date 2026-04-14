@@ -58,7 +58,7 @@ class LiveDashboard(QMainWindow):
     5. ALERTS & SAFETY    -- Safety status, controls, alert log
     6. ANALYTICS          -- Action distributions, training vs live, drift
     7. MANUAL TRADE MGMT  -- Live manual position tracking & SL protection
-    8. UPDATES            -- Version info, update check, download & restart
+    8. SETTINGS           -- MCP remote access, token mgmt, software updates
     """
 
     def __init__(self) -> None:
@@ -262,7 +262,7 @@ class LiveDashboard(QMainWindow):
             "ALERTS & SAFETY",
             "ANALYTICS",
             "MANUAL TRADE MGMT",
-            "UPDATES",
+            "SETTINGS",
         ]
 
         for name in tab_names:

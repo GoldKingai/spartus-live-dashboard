@@ -1,6 +1,6 @@
 """InferenceEngine -- Run live inference with a trained SAC model.
 
-Takes a 670-dim observation vector and produces 4 continuous action
+Takes a 680-dim observation vector and produces 4 continuous action
 values that the decision engine translates into trading decisions.
 
 Action semantics (all outputs are in [-1, +1] from the SAC actor):
@@ -17,7 +17,7 @@ Usage:
     components = loader.load()
     engine = InferenceEngine(components["model"])
 
-    obs = build_observation(...)   # np.ndarray of shape (670,)
+    obs = build_observation(...)   # np.ndarray of shape (680,)
     decision = engine.predict(obs)
     # decision = {
     #     "direction": -0.72,
@@ -81,7 +81,7 @@ class InferenceEngine:
         """Run model inference and return interpreted action dict.
 
         Args:
-            observation: 1-D numpy array of shape (670,) or (1, 670).
+            observation: 1-D numpy array of shape (680,) or (1, 680).
                 Any NaN/Inf values are replaced with 0.0 and a warning
                 is logged.  Values are clipped to [-10, +10].
 
@@ -117,18 +117,18 @@ class InferenceEngine:
         This method handles:
             1. NaN/Inf sanitisation (replaced with 0.0).
             2. Clipping to [-10, +10].
-            3. Reshaping to (1, 670) batch dimension.
+            3. Reshaping to (1, 680) batch dimension.
             4. Deterministic prediction (no exploration noise).
 
         Args:
-            observation: 1-D array of shape (670,) or 2-D of shape (1, 670).
+            observation: 1-D array of shape (680,) or 2-D of shape (1, 680).
 
         Returns:
             1-D numpy array of shape (4,) with raw action values in [-1, +1].
         """
         obs = np.asarray(observation, dtype=np.float32)
 
-        # Flatten if needed (handle both (670,) and (1, 670))
+        # Flatten if needed (handle both (680,) and (1, 680))
         if obs.ndim > 1:
             obs = obs.flatten()
 

@@ -105,7 +105,7 @@ from dashboard.tab_model_state import ModelStateTab
 from dashboard.tab_alerts import AlertsTab
 from dashboard.tab_analytics import AnalyticsTab
 from dashboard.tab_settings import SettingsTab
-from dashboard.tab_updates import UpdatesTab
+from dashboard.tab_mcp_settings import McpSettingsTab as UpdatesTab
 from dashboard import currency
 from dashboard.update_dialog import UpdateDialog, UpdateNotificationBar
 from core.auto_updater import AutoUpdater, get_local_version
@@ -232,6 +232,7 @@ class SpartusOrchestrator:
         self._last_decision: str = ""
         self._initial_balance: float = 0.0
         self._peak_balance: float = 0.0
+        self._start_time: float = time.time()
 
         # ---- Heartbeat / market status ----
         self._last_heartbeat_time: float = 0.0
@@ -647,8 +648,8 @@ class SpartusOrchestrator:
             "trail_atr_mult": self._config.manual_trail_atr_mult,
         })
 
-        # Tab 8: Updates
-        container_8 = self._dashboard.get_tab("UPDATES")
+        # Tab 8: Settings (MCP remote access + software updates)
+        container_8 = self._dashboard.get_tab("SETTINGS")
         self._tab_updates = UpdatesTab()
         container_8.layout().addWidget(self._tab_updates)
         # Set initial version
@@ -1404,7 +1405,7 @@ class SpartusOrchestrator:
         if self._live_logger:
             self._live_logger.log_observation(
                 {
-                    "observation_670": observation,
+                    f"observation_{self._config.obs_dim}": observation,
                     "action": [
                         action["direction"],
                         action["conviction"],
@@ -1681,6 +1682,10 @@ class SpartusOrchestrator:
             self._dashboard_update_inner()
         except Exception:
             log.exception("Error in dashboard update")
+        try:
+            self._write_live_state()
+        except Exception:
+            pass
 
     def _dashboard_update_inner(self) -> None:
         """Inner dashboard update logic.
@@ -1718,6 +1723,43 @@ class SpartusOrchestrator:
             )
         elif active_idx == 7:
             self._tab_updates.update_data(self._prepare_updates_data())
+
+    # ==================================================================
+    # Live State File (read by MCP server)
+    # ==================================================================
+
+    def _write_live_state(self) -> None:
+        """Write a JSON snapshot of live state for the MCP server to read."""
+        import json as _json
+        acct = self._mt5_bridge.get_account_info() if self._mt5_bridge else {}
+        pos_obj = self._position_manager.position if self._position_manager else None
+        pos = [pos_obj] if pos_obj else []
+        open_pnl = float(acct.get("equity", 0)) - float(acct.get("balance", 0))
+        trading_enabled = (
+            self._executor is not None
+            and hasattr(self._executor, "_state")
+            and str(self._executor._state).endswith("RUNNING")
+        )
+        state = {
+            "balance": round(float(acct.get("balance", 0)), 2),
+            "equity": round(float(acct.get("equity", 0)), 2),
+            "free_margin": round(float(acct.get("free_margin", 0)), 2),
+            "peak_balance": round(float(self._peak_balance), 2),
+            "currency": acct.get("currency", "GBP"),
+            "server": acct.get("server", ""),
+            "open_positions": len(pos),
+            "open_pnl": round(float(open_pnl), 2),
+            "open_positions_detail": pos,
+            "mt5_connected": bool(self._mt5_bridge and self._mt5_bridge._connected),
+            "model_loaded": bool(self._inference is not None),
+            "feature_pipeline_ok": bool(self._pipeline and self._pipeline.is_warmed_up()),
+            "trading_enabled": trading_enabled,
+            "paper_trading": bool(self._config.paper_trading) if self._config else True,
+            "uptime_seconds": int(time.time() - self._start_time) if hasattr(self, "_start_time") else 0,
+            "last_update": datetime.now(timezone.utc).isoformat(),
+        }
+        state_path = BASE_DIR / "storage" / "live_state.json"
+        state_path.write_text(_json.dumps(state, default=str), encoding="utf-8")
 
     # ==================================================================
     # Data Preparation for Dashboard Tabs
