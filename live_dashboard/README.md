@@ -207,24 +207,36 @@ The champion model package includes baselines for real-time drift detection:
 
 ### Requirements
 
-| Requirement | Details |
-|---|---|
-| **OS** | Windows 10/11 (64-bit) |
-| **Python** | 3.10 or higher (3.11 recommended) |
-| **MetaTrader 5** | Installed and logged into a broker account |
-| **GPU** | Not required (CPU inference is fast enough) |
-| **RAM** | 4 GB minimum |
+| Requirement | Windows | Linux / macOS |
+|---|---|---|
+| **OS** | Windows 10/11 (64-bit) | Ubuntu 20.04+, Debian 11+, Fedora 38+, macOS 12+ |
+| **Python** | 3.10 - 3.12 (3.11 recommended) | 3.10 - 3.12 (3.11 recommended) |
+| **MetaTrader 5** | Required for live trading | **Not natively supported** — see Linux/macOS notes below |
+| **GPU** | Not required (CPU inference is fast enough) | same |
+| **RAM** | 4 GB minimum | same |
 
 ### Step 1: Install
 
-**One-click install (recommended):** Double-click `install.bat`
+**Windows — one-click:** Double-click `install.bat`
 
-It creates a virtual environment, installs all dependencies, sets up directories, and verifies everything.
+**Linux / macOS — one-click:**
+```bash
+chmod +x install.sh launch.sh
+./install.sh
+```
+
+Both installers create a venv, install PyTorch CPU + dependencies, set up directories, and verify everything. On Linux/macOS the `MetaTrader5` package is automatically skipped via PEP 508 marker (it ships only a Windows binary).
 
 **Manual install:**
 ```bash
+# Windows
 python -m venv venv
 venv\Scripts\activate
+pip install -r requirements.txt
+
+# Linux / macOS
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -239,7 +251,26 @@ storage/models/
 
 ### Step 3: Launch
 
-Double-click `launch.bat` (Windows) or run `./launch.sh` (Linux/Mac).
+| Platform | Command |
+|---|---|
+| Windows | Double-click `launch.bat` |
+| Linux / macOS | `./launch.sh` |
+
+### Linux / macOS — MT5 Limitations
+
+`MetaTrader5` only ships a Windows binary. On Linux/macOS the dashboard installs cleanly but runs in **offline mode** by default:
+
+- ✅ UI shell loads
+- ✅ Replay & post-trade analysis
+- ✅ Model inference works (no broker connection needed)
+- ✅ Memory DB / journal browse
+- ❌ Live broker connection (requires Wine or remote bridge)
+
+**To enable live trading on Linux**, choose one:
+
+1. **Wine + Windows MT5** — install Wine, run Windows Python + MT5 inside Wine, launch the dashboard there. Most common path.
+2. **Remote MT5 bridge** — run MT5 + a small REST/socket bridge on a Windows host (cheap VPS works), point the dashboard at it via custom config. Requires a small bridge module (not included).
+3. **Stay offline** — use the dashboard for monitoring, analysis, and replay only.
 
 ---
 

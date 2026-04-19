@@ -1,0 +1,5 @@
+# Force LF line endings for shell scripts so they stay executable on
+# Linux/macOS even when the repo is cloned on a Windows host with
+# core.autocrlf=true. Without this, CRLF-converted .sh files fail with
+# "/bin/bash^M: bad interpreter" or "syntax error near unexpected token `$'...\r''".
+*.sh text eol=lf

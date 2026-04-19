@@ -2,16 +2,42 @@
 # ============================================================
 # Spartus Live Trading Dashboard -- One-Click Installer
 # ============================================================
-# This script:
+# Cross-platform installer for Linux / macOS.
+# Windows users: run install.bat instead.
+#
+# Steps:
 #   1. Checks for Python 3.10-3.12 (3.13+ has torch DLL issues)
 #   2. Creates a virtual environment
 #   3. Installs PyTorch CPU (must come BEFORE other deps)
-#   4. Installs all remaining dependencies
+#   4. Installs all remaining dependencies (MetaTrader5 auto-skipped on
+#      non-Windows via PEP 508 marker in requirements.txt)
 #   5. Creates required directories
 #   6. Verifies the installation
+#
+# ──────────────────────────────────────────────────────────────
+# IMPORTANT: MT5 + Linux/macOS
+# ──────────────────────────────────────────────────────────────
+# MetaTrader5 only ships a Windows binary. Pip will skip it on
+# Linux/macOS automatically. Without MT5, the dashboard runs in
+# offline mode — UI loads, post-trade analysis works, but live
+# broker connection is disabled.
+#
+# To enable live trading on Linux you can:
+#   (a) Run MT5 + Python under Wine
+#   (b) Use a remote MT5 bridge on a Windows host
 # ============================================================
 
 set -e
+
+# Detect platform for clearer error messages later
+OS_NAME="$(uname -s 2>/dev/null || echo unknown)"
+case "$OS_NAME" in
+    Linux*)   PLATFORM="Linux" ;;
+    Darwin*)  PLATFORM="macOS" ;;
+    MINGW*|MSYS*|CYGWIN*) PLATFORM="Windows-Bash" ;;
+    *)        PLATFORM="Unknown" ;;
+esac
+echo "Detected platform: $PLATFORM"
 
 echo ""
 echo "============================================================"
@@ -131,12 +157,20 @@ for pkg in PyQt6 stable_baselines3 numpy pandas ta yaml fastapi uvicorn; do
     fi
 done
 
-# Optional
+# Optional — MT5 is Windows-only; on Linux/macOS this is expected to be absent
 if $PYTHON -c "import MetaTrader5" 2>/dev/null; then
     echo "       [OK] MetaTrader5"
 else
-    echo "       [WARN] MetaTrader5 -- requires MT5 terminal to be installed."
+    if [ "$PLATFORM" = "Linux" ] || [ "$PLATFORM" = "macOS" ]; then
+        echo "       [INFO] MetaTrader5 -- not available on $PLATFORM (expected)."
+        echo "              Dashboard will run in offline mode (no live trading)."
+    else
+        echo "       [WARN] MetaTrader5 -- install MT5 terminal first."
+    fi
 fi
+
+# Make launch.sh executable so user can `./launch.sh` directly
+chmod +x launch.sh 2>/dev/null || true
 
 echo ""
 
@@ -154,10 +188,18 @@ echo "============================================================"
 echo ""
 echo "Next steps:"
 echo "  1. Place your trained model .zip in the model/ folder"
-echo "  2. Make sure MetaTrader 5 is running and logged in"
-echo "  3. In MT5, right-click Market Watch and click 'Show All'"
-echo "     (XAUUSD must be visible for the dashboard to work)"
-echo "  4. Run ./launch.sh to start the dashboard"
+if [ "$PLATFORM" = "Linux" ] || [ "$PLATFORM" = "macOS" ]; then
+    echo "  2. (LINUX/MACOS) Live trading needs MT5. Options:"
+    echo "       - Run via Wine + Windows MT5 + Windows Python"
+    echo "       - Use a remote MT5 bridge running on a Windows host"
+    echo "       - Or stay in offline/replay mode (dashboard UI only)"
+    echo "  3. Run ./launch.sh to start the dashboard"
+else
+    echo "  2. Make sure MetaTrader 5 is running and logged in"
+    echo "  3. In MT5, right-click Market Watch and click 'Show All'"
+    echo "     (XAUUSD must be visible for the dashboard to work)"
+    echo "  4. Run ./launch.sh to start the dashboard"
+fi
 echo ""
 echo "Configuration: config/default_config.yaml"
 echo "Logs:          storage/logs/dashboard.log"

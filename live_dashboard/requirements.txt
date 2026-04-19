@@ -1,5 +1,11 @@
 # Spartus Live Trading Dashboard - Dependencies
-MetaTrader5>=5.0.45
+#
+# MetaTrader5 ships only a Windows binary. The PEP 508 marker
+# `sys_platform == "win32"` makes pip skip the install on Linux/macOS so
+# `pip install -r requirements.txt` succeeds. The dashboard's MT5Bridge
+# imports gracefully on non-Windows platforms — live trading routes are
+# disabled until a Wine environment or a remote MT5 bridge is configured.
+MetaTrader5>=5.0.45; sys_platform == "win32"
 PyQt6>=6.5
 pyqtgraph>=0.13
 numpy>=1.24

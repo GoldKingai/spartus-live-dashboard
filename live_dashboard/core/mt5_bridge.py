@@ -22,12 +22,29 @@ Usage:
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
-import MetaTrader5 as mt5
+# MetaTrader5 is Windows-only. On Linux/macOS pip install MetaTrader5 fails
+# (no native binary available). Import gracefully so the dashboard can still
+# load on Linux for offline use (replay mode, post-trade analysis, UI shell).
+# Live trading on Linux requires either Wine + Windows MT5, a remote MT5
+# bridge, or a different broker integration.
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    mt5 = None
+    MT5_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "MetaTrader5 module not available on this platform (%s). "
+        "MT5Bridge will operate in stub mode — live trading disabled.",
+        sys.platform,
+    )
+
 import pandas as pd
 
 from config.live_config import LiveConfig
@@ -83,6 +100,17 @@ class MT5Bridge:
             all required symbols are available (or resolved via
             alternatives).
         """
+        # No-MT5 platforms (Linux/macOS without Wine): fail-safe with a clear
+        # log message so callers can route to replay-mode or remote-bridge mode
+        # instead of crashing on a NoneType.attribute access.
+        if not MT5_AVAILABLE:
+            log.error(
+                "MT5Bridge.connect() called but MetaTrader5 module is not "
+                "available on this platform (%s). Live trading not supported.",
+                sys.platform,
+            )
+            return False
+
         kwargs: Dict[str, Any] = {}
         if self._config.mt5_terminal_path:
             kwargs["path"] = self._config.mt5_terminal_path

@@ -21,7 +21,14 @@ sys.path.insert(0, str(BASE_DIR))
 try:
     import MetaTrader5 as mt5
 except ImportError:
-    print("ERROR: MetaTrader5 package not installed")
+    # MetaTrader5 is Windows-only. On Linux/macOS, this script can't run.
+    print(
+        "ERROR: MetaTrader5 package not installed.\n"
+        f"  Platform: {sys.platform}\n"
+        "  Note: MetaTrader5 only ships a Windows binary. On Linux/macOS\n"
+        "  you can run via Wine + Windows Python, or use the dashboard's\n"
+        "  replay/offline modes instead of this live diagnostic script."
+    )
     sys.exit(1)
 
 
