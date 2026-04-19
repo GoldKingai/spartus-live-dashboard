@@ -52,16 +52,13 @@ logging.basicConfig(
 log = logging.getLogger("spartus.live")
 
 # ---------------------------------------------------------------------------
-# Graceful MetaTrader5 import
+# MetaTrader5 import — route through the bridge so both native (Windows) and
+# mt5linux RPC (Linux/Wine) transports are used consistently across the app.
+# Importing core.mt5_bridge has no MT5 hard dependency; the bridge selects
+# the available transport (native > mt5linux > offline) at module load.
 # ---------------------------------------------------------------------------
-try:
-    import MetaTrader5 as mt5
-except ImportError:
-    mt5 = None
-    log.warning(
-        "MetaTrader5 module not installed.  "
-        "Install with: pip install MetaTrader5"
-    )
+from core.mt5_bridge import mt5, MT5_TRANSPORT  # noqa: E402
+log.info("MetaTrader5 transport: %s", MT5_TRANSPORT)
 
 # ---------------------------------------------------------------------------
 # Component imports

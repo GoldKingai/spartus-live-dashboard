@@ -204,3 +204,29 @@ echo ""
 echo "Configuration: config/default_config.yaml"
 echo "Logs:          storage/logs/dashboard.log"
 echo ""
+
+# ─────────────────────────────────────────────────────────────────
+# Linux/macOS: optional MT5-in-Wine bridge instructions
+# ─────────────────────────────────────────────────────────────────
+if [ "$PLATFORM" = "Linux" ] || [ "$PLATFORM" = "macOS" ]; then
+    echo "============================================================"
+    echo "  LINUX LIVE TRADING (optional) — MT5 bridge setup"
+    echo "============================================================"
+    echo ""
+    echo "Want live trading on $PLATFORM? MT5 needs to run in Wine and"
+    echo "expose its API over the mt5linux RPC bridge. Steps:"
+    echo ""
+    echo "  1. Install Wine and create an MT5 Wine prefix"
+    echo "  2. Install Windows Python 3.11 inside that Wine prefix"
+    echo "  3. Inside Wine Python:  pip install MetaTrader5 mt5linux"
+    echo "  4. Start the bridge daemon (inside Wine):"
+    echo "        python -m mt5linux --host localhost --port 18812"
+    echo "  5. Launch the dashboard — it auto-detects the bridge."
+    echo ""
+    echo "  Override host/port via env vars before launch:"
+    echo "        export MT5_BRIDGE_HOST=192.168.1.50"
+    echo "        export MT5_BRIDGE_PORT=18812"
+    echo ""
+    echo "  Full walkthrough: docs/LINUX_BRIDGE.md"
+    echo ""
+fi

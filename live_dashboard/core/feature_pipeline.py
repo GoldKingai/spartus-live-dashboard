@@ -58,10 +58,10 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-try:
-    import MetaTrader5 as mt5
-except ImportError:
-    mt5 = None  # Allow import without MT5 for testing
+# Route through the bridge so native (Windows) and mt5linux (Linux/Wine)
+# transports are used consistently. Direct `import MetaTrader5` would crash
+# at module load on Linux even when the bridge is providing access.
+from core.mt5_bridge import mt5  # type: ignore[no-redef]
 
 from config.live_config import LiveConfig
 from core.live_normalizer import LiveNormalizer, _MIN_PERIODS

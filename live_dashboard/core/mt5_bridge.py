@@ -28,22 +28,45 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
-# MetaTrader5 is Windows-only. On Linux/macOS pip install MetaTrader5 fails
-# (no native binary available). Import gracefully so the dashboard can still
-# load on Linux for offline use (replay mode, post-trade analysis, UI shell).
-# Live trading on Linux requires either Wine + Windows MT5, a remote MT5
-# bridge, or a different broker integration.
+# MetaTrader5 transport selection:
+#   1. Native: Windows with MetaTrader5 installed → use it directly
+#   2. Bridge: Linux/macOS → fall back to mt5linux RPC client targeting MT5
+#      running inside Wine on the same machine (or a remote Windows host)
+#   3. Offline: Neither available → MT5Bridge enters stub mode, all data
+#      methods return safe defaults, order execution is refused
+#
+# MT5_TRANSPORT exposes which mode is active so other modules + the dashboard
+# can show it to the user.
 try:
     import MetaTrader5 as mt5
     MT5_AVAILABLE = True
+    MT5_TRANSPORT = "native"
 except ImportError:
-    mt5 = None
-    MT5_AVAILABLE = False
-    logging.getLogger(__name__).warning(
-        "MetaTrader5 module not available on this platform (%s). "
-        "MT5Bridge will operate in stub mode — live trading disabled.",
-        sys.platform,
-    )
+    # Fall back to mt5linux RPC bridge (Linux + Wine-hosted MT5)
+    try:
+        import os as _os
+        from mt5linux import MetaTrader5 as _MT5Client
+
+        _host = _os.environ.get("MT5_BRIDGE_HOST", "localhost")
+        _port = int(_os.environ.get("MT5_BRIDGE_PORT", "18812"))
+        mt5 = _MT5Client(host=_host, port=_port)
+        MT5_AVAILABLE = True
+        MT5_TRANSPORT = "mt5linux-bridge"
+        logging.getLogger(__name__).info(
+            "MetaTrader5 transport: mt5linux bridge at %s:%d", _host, _port,
+        )
+    except Exception as _bridge_err:
+        mt5 = None
+        MT5_AVAILABLE = False
+        MT5_TRANSPORT = "offline"
+        logging.getLogger(__name__).warning(
+            "MetaTrader5 module not available on this platform (%s). "
+            "MT5Bridge will operate in stub mode — live trading disabled. "
+            "(bridge import error: %s)",
+            sys.platform, _bridge_err,
+        )
+
+__all__ = ["MT5Bridge", "MT5_AVAILABLE", "MT5_TRANSPORT", "mt5"]
 
 import pandas as pd
 
@@ -114,14 +137,22 @@ class MT5Bridge:
         # No-MT5 platforms: enter offline mode so the dashboard UI can load.
         if not MT5_AVAILABLE:
             log.warning(
-                "MT5Bridge: MetaTrader5 module not available on %s. "
+                "MT5Bridge: MetaTrader5 transport=%s on %s. "
                 "Entering OFFLINE MODE — UI loads, all live-data methods "
-                "return safe defaults, order execution is disabled.",
-                sys.platform,
+                "return safe defaults, order execution is disabled. "
+                "To enable live trading on Linux, run MT5+mt5linux inside "
+                "Wine and set MT5_BRIDGE_HOST/MT5_BRIDGE_PORT (defaults "
+                "localhost:18812).",
+                MT5_TRANSPORT, sys.platform,
             )
             self._initialized = True  # so downstream "is connected" checks pass
             self._offline_mode = True
             return True
+        # Bridge transport — connection is via RPC; mt5.initialize() will
+        # contact the remote/wine-hosted MT5 instance and return False if the
+        # bridge daemon isn't running.
+        if MT5_TRANSPORT == "mt5linux-bridge":
+            log.info("MT5Bridge: connecting via mt5linux bridge")
 
         kwargs: Dict[str, Any] = {}
         if self._config.mt5_terminal_path:

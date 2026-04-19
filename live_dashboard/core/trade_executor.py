@@ -2238,15 +2238,19 @@ class TradeExecutor:
                 "price fallback",
                 ticket,
             )
-            # Get current market price to infer what happened
+            # Get current market price to infer what happened.
+            # Route through bridge so native + mt5linux transports both work.
             try:
-                import MetaTrader5 as mt5_mod
-                broker_sym = self._bridge._broker_name(self._config.mt5_symbol)
-                tick = mt5_mod.symbol_info_tick(broker_sym)
-                if tick is not None:
-                    current_price = tick.bid if side == "LONG" else tick.ask
-                else:
+                from core.mt5_bridge import mt5 as mt5_mod
+                if mt5_mod is None:
                     current_price = entry_price
+                else:
+                    broker_sym = self._bridge._broker_name(self._config.mt5_symbol)
+                    tick = mt5_mod.symbol_info_tick(broker_sym)
+                    if tick is not None:
+                        current_price = tick.bid if side == "LONG" else tick.ask
+                    else:
+                        current_price = entry_price
             except Exception:
                 current_price = entry_price
 

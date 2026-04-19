@@ -219,7 +219,20 @@ class ModelLoader:
         try:
             from stable_baselines3 import SAC
 
-            model = SAC.load(str(model_zip), device="cpu")
+            # Override pickled lr_schedule / learning_rate. SB3 invokes the
+            # schedule once on load (with progress_remaining=1) to validate
+            # it; if the trainer's schedule function had any edge case at
+            # progress=1 (e.g. min() on an empty sequence), the load fails.
+            # Inference doesn't need the schedule — only continued training
+            # would, and we never resume training in the live dashboard.
+            model = SAC.load(
+                str(model_zip),
+                device="cpu",
+                custom_objects={
+                    "lr_schedule": lambda _: 0.0,
+                    "learning_rate": 0.0,
+                },
+            )
             log.info("SAC model loaded successfully (device=cpu)")
             return model
         except Exception as exc:

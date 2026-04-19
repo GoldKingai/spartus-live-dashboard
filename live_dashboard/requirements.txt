@@ -6,6 +6,14 @@
 # imports gracefully on non-Windows platforms — live trading routes are
 # disabled until a Wine environment or a remote MT5 bridge is configured.
 MetaTrader5>=5.0.45; sys_platform == "win32"
+
+# Linux/macOS bridge to MT5 running inside Wine. Mirrors the MetaTrader5
+# Python API over RPC. Setup: install Windows Python + MetaTrader5 inside
+# a Wine prefix, then `python -m mt5linux` inside Wine to run the daemon.
+# The dashboard auto-detects this transport when native MetaTrader5 is
+# unavailable. Override the connection via MT5_BRIDGE_HOST / MT5_BRIDGE_PORT.
+mt5linux>=1.0.3; sys_platform != "win32"
+
 PyQt6>=6.5
 pyqtgraph>=0.13
 numpy>=1.24

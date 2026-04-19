@@ -391,7 +391,13 @@ class StartupValidator:
         if self.mt5 is None:
             return False, "MT5 bridge not initialized"
         try:
-            import MetaTrader5 as mt5_mod
+            # Route through the bridge's mt5 attribute so the same transport
+            # (native / mt5linux-bridge) is used everywhere — direct
+            # `import MetaTrader5` would fail on Linux even when the bridge
+            # is providing access via mt5linux RPC.
+            from core.mt5_bridge import mt5 as mt5_mod
+            if mt5_mod is None:
+                return False, "MetaTrader5 module/bridge not available"
 
             symbol = self.config.mt5_symbol
             bars = self.mt5.get_latest_bars(

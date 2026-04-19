@@ -115,7 +115,12 @@ class BrokerConstraints:
             return False
 
         try:
-            import MetaTrader5 as mt5
+            # Route through the bridge so native (Windows) and mt5linux
+            # (Linux/Wine) transports both work. Direct `import MetaTrader5`
+            # fails on Linux even when the bridge is providing access.
+            from core.mt5_bridge import mt5
+            if mt5 is None:
+                return False  # Offline mode — no constraints to refresh
 
             broker_sym = self._bridge._broker_name(self._symbol)
             sym = mt5.symbol_info(broker_sym)
@@ -178,7 +183,10 @@ class BrokerConstraints:
             return False
 
         try:
-            import MetaTrader5 as mt5
+            # Route through the bridge — see heavy_refresh comment above.
+            from core.mt5_bridge import mt5
+            if mt5 is None:
+                return False  # Offline mode
 
             broker_sym = self._bridge._broker_name(self._symbol)
             sym = mt5.symbol_info(broker_sym)

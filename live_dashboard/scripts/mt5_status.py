@@ -18,16 +18,17 @@ from datetime import datetime, timezone
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-try:
-    import MetaTrader5 as mt5
-except ImportError:
-    # MetaTrader5 is Windows-only. On Linux/macOS, this script can't run.
+# Route through the bridge so this utility works on both Windows (native
+# MetaTrader5) and Linux (mt5linux RPC bridge to Wine-hosted MT5).
+from core.mt5_bridge import mt5, MT5_TRANSPORT  # noqa: E402
+if mt5 is None:
     print(
-        "ERROR: MetaTrader5 package not installed.\n"
+        "ERROR: MT5 transport not available.\n"
         f"  Platform: {sys.platform}\n"
-        "  Note: MetaTrader5 only ships a Windows binary. On Linux/macOS\n"
-        "  you can run via Wine + Windows Python, or use the dashboard's\n"
-        "  replay/offline modes instead of this live diagnostic script."
+        f"  Transport: {MT5_TRANSPORT}\n"
+        "  On Windows: pip install MetaTrader5\n"
+        "  On Linux:   set up MT5+mt5linux in Wine, then run\n"
+        "              `python -m mt5linux --host localhost --port 18812`"
     )
     sys.exit(1)
 
