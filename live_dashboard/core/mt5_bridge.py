@@ -379,6 +379,8 @@ class MT5Bridge:
 
         E.g. for XAUUSD with digits=2 and spread=21, this returns 0.21.
         """
+        if self._offline_mode:
+            return 0.0
         broker_sym = self._broker_name(symbol)
         sym = mt5.symbol_info(broker_sym)
         if sym is None:
@@ -390,6 +392,8 @@ class MT5Bridge:
 
     def get_tick_value(self, symbol: str = "XAUUSD") -> float:
         """Return the live trade_tick_value in account currency."""
+        if self._offline_mode:
+            return self.tick_value  # cached default
         broker_sym = self._broker_name(symbol)
         sym = mt5.symbol_info(broker_sym)
         if sym is None:
@@ -462,6 +466,9 @@ class MT5Bridge:
             Dict with keys: success (bool), ticket (int or None),
             fill_price (float or None), error (str or None).
         """
+        if self._offline_mode:
+            return {"success": False, "ticket": None, "fill_price": None,
+                    "error": "Live trading disabled: MetaTrader5 unavailable on this platform"}
         broker_sym = self._broker_name(symbol)
         sym = mt5.symbol_info(broker_sym)
         if sym is None:
@@ -570,6 +577,8 @@ class MT5Bridge:
         Returns:
             True if the modification was accepted by the server.
         """
+        if self._offline_mode:
+            return False
         # Look up the current position to get symbol and current SL/TP
         positions = mt5.positions_get(ticket=ticket)
         if positions is None or len(positions) == 0:
@@ -617,6 +626,9 @@ class MT5Bridge:
             Dict with keys: success (bool), ticket (int or None),
             fill_price (float or None), error (str or None).
         """
+        if self._offline_mode:
+            return {"success": False, "ticket": None, "fill_price": None,
+                    "error": "Live trading disabled: MetaTrader5 unavailable"}
         positions = mt5.positions_get(ticket=ticket)
         if positions is None or len(positions) == 0:
             msg = f"Position {ticket} not found"
@@ -730,6 +742,8 @@ class MT5Bridge:
         """
         from datetime import timedelta
 
+        if self._offline_mode:
+            return []
         broker_sym = self._broker_name(symbol)
         date_to = datetime.now(timezone.utc)
         date_from = date_to - timedelta(days=days)
@@ -822,6 +836,8 @@ class MT5Bridge:
             pnl, open_time, close_time, magic, comment.
             None if the position is not found or still open.
         """
+        if self._offline_mode:
+            return None
         deals = mt5.history_deals_get(position=ticket)
         if not deals or len(deals) == 0:
             return None
@@ -878,6 +894,8 @@ class MT5Bridge:
         Returns:
             Profit/loss in account currency, or None on failure.
         """
+        if self._offline_mode:
+            return None
         order_type = (
             mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
             else mt5.ORDER_TYPE_SELL
@@ -911,6 +929,8 @@ class MT5Bridge:
         Returns:
             Margin required in account currency, or None on failure.
         """
+        if self._offline_mode:
+            return None
         order_type = (
             mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
             else mt5.ORDER_TYPE_SELL
@@ -943,6 +963,8 @@ class MT5Bridge:
             Dict with retcode, margin, margin_free, margin_level, comment,
             or None on failure.
         """
+        if self._offline_mode:
+            return None
         broker_sym = self._broker_name(symbol)
         order_type = (
             mt5.ORDER_TYPE_BUY if side.upper() == "BUY"
@@ -988,6 +1010,8 @@ class MT5Bridge:
         Uses the symbol's session info and trade mode to determine
         whether orders can be placed right now.
         """
+        if self._offline_mode:
+            return False  # No live market in offline mode
         broker_sym = self._broker_name(self._config.mt5_symbol)
         sym = mt5.symbol_info(broker_sym)
         if sym is None:
@@ -1076,6 +1100,11 @@ class MT5Bridge:
         """Check if the MT5 terminal is currently reachable."""
         if not self._initialized:
             return False
+        if self._offline_mode:
+            # In offline mode we consider the bridge "connected" (returns True)
+            # so status-panel UIs don't report endless disconnection; order
+            # execution paths still refuse because of their own offline_mode guards.
+            return True
         try:
             info = mt5.terminal_info()
             return info is not None and info.connected
