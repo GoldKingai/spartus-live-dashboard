@@ -292,20 +292,22 @@ class SpartusOrchestrator:
         # 2. Ensure storage directories
         self._ensure_storage_dirs()
 
-        # 3. Check MetaTrader5 is available
-        if mt5 is None:
-            log.error(
-                "MetaTrader5 module is not installed. Cannot proceed. "
-                "Install with: pip install MetaTrader5"
-            )
-            return False
-
-        # 4. MT5 Bridge -> connect
+        # 3. MT5 Bridge -> connect (enters OFFLINE MODE on Linux/macOS where
+        #    MetaTrader5 isn't installed; UI still loads for replay/inspection)
         self._mt5_bridge = MT5Bridge(self._config)
         if not self._mt5_bridge.connect():
             log.error("Failed to connect to MT5 terminal")
             return False
-        log.info("MT5 bridge connected")
+        # Track offline mode — most downstream init can be skipped without it,
+        # but the model/inference engine + UI still load for diagnostic use.
+        self._offline_mode = bool(getattr(self._mt5_bridge, "_offline_mode", False))
+        if self._offline_mode:
+            log.warning(
+                "Live trading disabled — running in OFFLINE MODE "
+                "(install MetaTrader5 on Windows for full functionality)."
+            )
+        else:
+            log.info("MT5 bridge connected")
 
         # 4b. Detect account currency and set global symbol for UI formatting
         _acct = self._mt5_bridge.get_account_info()
@@ -2679,12 +2681,11 @@ def main() -> int:
 
     # Initialize all components
     if not orchestrator.initialize():
-        log.error("Initialization failed -- launching dashboard in limited mode")
-        # Still try to launch dashboard for diagnostics
-        # But if MT5 is completely unavailable, we cannot proceed
-        if mt5 is None:
-            log.error("MetaTrader5 not installed -- cannot launch")
-            return 1
+        log.error("Initialization failed — launching dashboard in limited mode")
+        # Still try to launch dashboard for diagnostics. Previously bailed here
+        # if MT5 wasn't installed; now MT5Bridge enters OFFLINE MODE on
+        # Linux/macOS so initialization can succeed and the UI can still load
+        # (for model inspection, replay, post-trade analysis).
 
     # Launch dashboard (blocks until window closes)
     exit_code = orchestrator.launch()

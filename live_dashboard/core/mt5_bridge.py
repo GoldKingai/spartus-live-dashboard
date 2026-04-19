@@ -88,6 +88,11 @@ class MT5Bridge:
         # Emergency callback -- set externally (e.g. by the safety module)
         self.on_emergency_stop: Optional[Callable[[], None]] = None
 
+        # Offline mode flag — True when MT5 isn't available (Linux/macOS) so
+        # the bridge returns safe defaults from all read methods. Set by
+        # connect() when MT5_AVAILABLE is False.
+        self._offline_mode: bool = False
+
     # ------------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------------
@@ -99,17 +104,24 @@ class MT5Bridge:
             True if the terminal is connected, account detected, and
             all required symbols are available (or resolved via
             alternatives).
+
+        On Linux/macOS where MetaTrader5 isn't available, returns True in
+        OFFLINE MODE — the bridge loads but every data-fetching method
+        returns safe defaults so the dashboard UI can still launch for
+        replay / model inspection / post-trade analysis. Live order
+        execution remains disabled.
         """
-        # No-MT5 platforms (Linux/macOS without Wine): fail-safe with a clear
-        # log message so callers can route to replay-mode or remote-bridge mode
-        # instead of crashing on a NoneType.attribute access.
+        # No-MT5 platforms: enter offline mode so the dashboard UI can load.
         if not MT5_AVAILABLE:
-            log.error(
-                "MT5Bridge.connect() called but MetaTrader5 module is not "
-                "available on this platform (%s). Live trading not supported.",
+            log.warning(
+                "MT5Bridge: MetaTrader5 module not available on %s. "
+                "Entering OFFLINE MODE — UI loads, all live-data methods "
+                "return safe defaults, order execution is disabled.",
                 sys.platform,
             )
-            return False
+            self._initialized = True  # so downstream "is connected" checks pass
+            self._offline_mode = True
+            return True
 
         kwargs: Dict[str, Any] = {}
         if self._config.mt5_terminal_path:
@@ -260,6 +272,8 @@ class MT5Bridge:
         Keys: currency, balance, equity, margin, free_margin, leverage,
         server, name.
         """
+        if self._offline_mode:
+            return {}  # No live account in offline mode
         acct = mt5.account_info()
         if acct is None:
             log.error("get_account_info: account_info() returned None")
@@ -286,6 +300,8 @@ class MT5Bridge:
         Keys: tick_value, tick_size, contract_size, volume_min,
         volume_max, volume_step, point, spread, digits.
         """
+        if self._offline_mode:
+            return {}  # No symbol info in offline mode
         broker_sym = self._broker_name(symbol)
         sym = mt5.symbol_info(broker_sym)
         if sym is None:
@@ -326,6 +342,8 @@ class MT5Bridge:
             ``time`` is a UTC datetime.  Returns an empty DataFrame on
             failure.
         """
+        if self._offline_mode:
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
         broker_sym = self._broker_name(symbol)
         rates = mt5.copy_rates_from_pos(broker_sym, timeframe, 0, count)
 
@@ -389,6 +407,8 @@ class MT5Bridge:
         Each dict contains: ticket, type (0=BUY,1=SELL), volume, price_open,
         sl, tp, profit, swap, time, magic, comment.
         """
+        if self._offline_mode:
+            return []  # No positions in offline mode
         broker_sym = self._broker_name(symbol)
         positions = mt5.positions_get(symbol=broker_sym)
 
